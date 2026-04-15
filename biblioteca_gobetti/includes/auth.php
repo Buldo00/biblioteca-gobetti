@@ -4,17 +4,21 @@
  * Integra con il sistema utenti esistente della scuola
  */
 
-session_start();
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
 
 // Costanti livelli utente
-define('LIVELLO_STUDENTE', 100);
-define('LIVELLO_DOCENTE', 300);
-define('LIVELLO_BIBLIOTECARIO', 320);
-define('LIVELLO_TECNICO', 400);
-define('LIVELLO_COLLABORATORE', 500);
-define('LIVELLO_AMMINISTRATIVO', 600);
-define('LIVELLO_DIRIGENTE', 900);
-define('LIVELLO_ADMIN', 999);
+if (!defined('LIVELLO_STUDENTE')) {
+    define('LIVELLO_STUDENTE', 100);
+    define('LIVELLO_DOCENTE', 300);
+    define('LIVELLO_BIBLIOTECARIO', 320);
+    define('LIVELLO_TECNICO', 400);
+    define('LIVELLO_COLLABORATORE', 500);
+    define('LIVELLO_AMMINISTRATIVO', 600);
+    define('LIVELLO_DIRIGENTE', 900);
+    define('LIVELLO_ADMIN', 999);
+}
 
 require_once __DIR__ . '/../config/database.php';
 

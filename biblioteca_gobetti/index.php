@@ -2,10 +2,8 @@
 /**
  * Pagina di Login - Biblioteca Gobetti
  */
-session_start();
-
-require_once __DIR__ . '/config/database.php';
 require_once __DIR__ . '/includes/auth.php';
+require_once __DIR__ . '/includes/functions.php';
 
 // Se già loggato, redirect alla dashboard
 if (isLogged()) {
@@ -86,7 +84,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <div class="login-footer">
                 <small>Account di test (password: <code>password123</code>):</small>
                 <div class="test-accounts">
-                    <span class="badge badge-info">s.christian.aicardi@gobettire.istruzioneer.it (Studente)</span>
+                    <span class="badge badge-info">s.adam.aachir@gobettire.istruzioneer.it (Studente)</span>
+                    <span class="badge badge-info">emanuela.franchini@gobettire.istruzioneer.it (Docente)</span>
+                    <span class="badge badge-info">michele.romei@gobettire.istruzioneer.it (Bibliotecario)</span>
+                    <span class="badge badge-info">s.simone.guidetti@gobettire.istruzioneer.it (Admin)</span>
                 </div>
             </div>
         </div>

@@ -4,11 +4,13 @@
  * Connessione al database esistente della scuola
  */
 
-define('DB_HOST', 'localhost');
-define('DB_NAME', 'gobetti');  // Database scolastico esistente
-define('DB_USER', 'root');
-define('DB_PASS', '');
-define('DB_CHARSET', 'utf8');
+if (!defined('DB_HOST')) {
+    define('DB_HOST', 'localhost');
+    define('DB_NAME', 'gobetti');  // Database scolastico esistente
+    define('DB_USER', 'root');
+    define('DB_PASS', '');
+    define('DB_CHARSET', 'utf8');
+}
 
 class Database {
     private static $instance = null;

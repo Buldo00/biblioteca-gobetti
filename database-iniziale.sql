@@ -52015,7 +52015,8 @@ ALTER TABLE `utenti` ADD COLUMN `passwordUtente` VARCHAR(255) COLLATE utf8_unico
 -- -------------------------------------------------
 -- 3. Password di test per alcuni utenti esistenti
 -- -------------------------------------------------
-UPDATE `utenti` SET `passwordUtente` = '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi' WHERE `IDUtente` IN (1, 2, 3, 18, 651);
+-- password123 = bcrypt hash
+UPDATE `utenti` SET `passwordUtente` = '$2y$10$tUG8c92wxjjnID1RM9UQgeUtLHmBk923DAEF2B0c4I9f9D/7PwImi' WHERE `IDUtente` IN (1, 2, 3, 18, 651);
 
 -- -------------------------------------------------
 -- 4. Assegnazione ruoli admin e bibliotecario
@@ -52029,8 +52030,8 @@ INSERT INTO `utenti_tipolivelli` (`IDUtente_livello`, `idUtente`, `idLivello`) V
 INSERT INTO `utenti_tipolivelli` (`IDUtente_livello`, `idUtente`, `idLivello`) VALUES
 (2601, 1379, 70);
 
--- Set passwords for profili users too
-UPDATE `utenti` SET `passwordUtente` = '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi' WHERE `IDUtente` IN (1379, 1386, 1390, 1391, 1394, 1399, 651, 2011, 2012, 2013);
+-- Set passwords for profili users too (password123)
+UPDATE `utenti` SET `passwordUtente` = '$2y$10$tUG8c92wxjjnID1RM9UQgeUtLHmBk923DAEF2B0c4I9f9D/7PwImi' WHERE `IDUtente` IN (1379, 1386, 1390, 1391, 1394, 1399, 651, 2011, 2012, 2013);
 
 -- ============================================
 -- MODULO BIBLIOTECA GOBETTI - TABELLE

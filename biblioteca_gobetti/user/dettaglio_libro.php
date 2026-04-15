@@ -1,176 +1,257 @@
 <?php
 /**
- * Dettaglio Libro da QR Code - Biblioteca Gobetti
+ * Dettaglio Libro - Biblioteca Gobetti
+ * Visualizzazione completa informazioni libro
  */
-
-require_once '../includes/functions.php';
+require_once __DIR__ . '/../includes/auth.php';
+require_once __DIR__ . '/../includes/functions.php';
 requireLogin();
 
-$db = getDB();
 $user = getCurrentUser();
+$idLibro = (int)($_GET['id'] ?? 0);
 
-$libro_id = $_GET['id'] ?? null;
-$copia = $_GET['copia'] ?? 1;
-
-if (!$libro_id) {
-    die("Libro non specificato");
+if (!$idLibro) {
+    header('Location: catalogo.php');
+    exit;
 }
 
-// Ottieni libro
-$stmt = $db->prepare("SELECT * FROM libri WHERE id = ?");
-$stmt->execute([$libro_id]);
-$libro = $stmt->fetch();
-
+$libro = getLibro($idLibro);
 if (!$libro) {
-    die("Libro non trovato");
+    header('Location: catalogo.php?errore=libro_non_trovato');
+    exit;
 }
 
-// Verifica se il libro è in prestito per questa copia
-$stmt = $db->prepare("
-    SELECT p.*, u.nome, u.cognome 
-    FROM prestiti p
-    JOIN utenti u ON p.utente_id = u.id
-    WHERE p.libro_id = ? AND p.stato IN ('attivo', 'in_ritardo')
-    LIMIT 1
-");
-$stmt->execute([$libro_id]);
-$prestito_attivo = $stmt->fetch();
+$copie = getCopieLibro($idLibro);
+$disponibili = max(0, (int)$libro['copie_disponibili']);
+$totCopie = (int)$libro['totale_copie'];
+$puoPrenotareUtente = puoPrenotare($user['id']);
+$inBlacklistUtente = isInBlacklist($user['id']);
 
-// Determina azione basata su ruolo e stato
-$is_bibliotecario = $user['livello'] >= LIVELLO_BIBLIOTECARIO;
-$azione = null;
+// Messaggio di feedback
+$messaggio = '';
+$tipoMessaggio = '';
 
-if ($is_bibliotecario) {
-    if ($prestito_attivo) {
-        $azione = 'restituzione';
-    } else {
-        $azione = 'assegnazione';
-    }
-} else {
-    // Studenti e docenti vedono solo disponibilità
-    $azione = 'visualizza';
-}
-?>
-<!DOCTYPE html>
-<html lang="it">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title><?php echo e($libro['titolo']); ?> - Biblioteca Gobetti</title>
-    <link rel="stylesheet" href="../assets/css/style.css">
-</head>
-<body data-livello="<?php echo $user['livello']; ?>">
-    <?php include '../includes/header.php'; ?>
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $azione = $_POST['azione'] ?? '';
     
-    <div class="container">
-        <div class="card">
-            <div class="card-header">
-                <h2 class="card-title">
-                    <?php echo e($libro['titolo']); ?>
-                    <span class="badge badge-info" style="font-size: 0.7em; margin-left: 10px;">
-                        Copia <?php echo $copia; ?>/<?php echo $libro['numero_copie']; ?>
-                    </span>
-                </h2>
-            </div>
-            
-            <div class="form-row">
-                <div style="flex: 1;">
-                    <?php if ($libro['immagine_copertina']): ?>
-                        <img src="<?php echo e($libro['immagine_copertina']); ?>" alt="Copertina" style="width: 100%; max-width: 300px; border-radius: 12px;">
-                    <?php endif; ?>
+    if ($azione === 'prenota' && $disponibili > 0 && $puoPrenotareUtente && !$inBlacklistUtente) {
+        $risultato = creaPrenotazione($user['id'], $idLibro);
+        if ($risultato) {
+            $messaggio = 'Prenotazione effettuata con successo! Ritira il libro in biblioteca.';
+            $tipoMessaggio = 'success';
+            // Refresh data
+            $libro = getLibro($idLibro);
+            $copie = getCopieLibro($idLibro);
+            $disponibili = max(0, (int)$libro['copie_disponibili']);
+            $totCopie = (int)$libro['totale_copie'];
+        } else {
+            $messaggio = 'Impossibile effettuare la prenotazione. Nessuna copia disponibile.';
+            $tipoMessaggio = 'danger';
+        }
+    } elseif ($azione === 'notifica') {
+        $risultato = richiediNotifica($user['id'], $idLibro);
+        if ($risultato) {
+            $messaggio = 'Ti avviseremo quando il libro sarà di nuovo disponibile.';
+            $tipoMessaggio = 'success';
+        } else {
+            $messaggio = 'Hai già richiesto una notifica per questo libro.';
+            $tipoMessaggio = 'warning';
+        }
+    }
+}
+
+include __DIR__ . '/../includes/header.php';
+?>
+
+<div class="container">
+    <div class="page-header">
+        <a href="catalogo.php" class="btn btn-outline btn-sm">
+            <i class="fas fa-arrow-left"></i> Torna al catalogo
+        </a>
+    </div>
+
+    <?php if ($messaggio): ?>
+    <div class="alert alert-<?= $tipoMessaggio ?>">
+        <i class="fas fa-<?= $tipoMessaggio === 'success' ? 'check-circle' : ($tipoMessaggio === 'warning' ? 'exclamation-triangle' : 'times-circle') ?>"></i>
+        <?= htmlspecialchars($messaggio) ?>
+    </div>
+    <?php endif; ?>
+
+    <div class="book-detail">
+        <!-- Copertina e info principali -->
+        <div class="book-detail-top">
+            <div class="book-detail-cover">
+                <?php if (!empty($libro['copertina'])): ?>
+                <img src="<?= htmlspecialchars($libro['copertina']) ?>" alt="<?= htmlspecialchars($libro['titolo']) ?>">
+                <?php else: ?>
+                <div class="book-cover-placeholder large">
+                    <i class="fas fa-book"></i>
+                    <span><?= htmlspecialchars(mb_substr($libro['titolo'], 0, 50)) ?></span>
                 </div>
-                
-                <div style="flex: 2;">
-                    <?php if ($libro['autore']): ?>
-                        <p><strong>Autore:</strong> <?php echo e($libro['autore']); ?></p>
-                    <?php endif; ?>
-                    <?php if ($libro['anno_uscita']): ?>
-                        <p><strong>Anno:</strong> <?php echo e($libro['anno_uscita']); ?></p>
-                    <?php endif; ?>
-                    <?php if ($libro['casa_editrice']): ?>
-                        <p><strong>Editore:</strong> <?php echo e($libro['casa_editrice']); ?></p>
-                    <?php endif; ?>
-                    <p><strong>Tipo:</strong> <?php echo e(ucfirst($libro['tipo'])); ?></p>
-                    <?php if ($libro['genere']): ?>
-                        <p><strong>Genere:</strong> <?php echo e($libro['genere']); ?></p>
-                    <?php endif; ?>
-                    <?php if ($libro['codice_dewey']): ?>
-                        <p><strong>Codice Dewey:</strong> <?php echo e($libro['codice_dewey']); ?></p>
-                    <?php endif; ?>
-                    <?php if ($libro['numero_armadio']): ?>
-                        <p><strong>Armadio:</strong> <?php echo e($libro['numero_armadio']); ?></p>
-                    <?php endif; ?>
-                    <?php if ($libro['numero_ripiano']): ?>
-                        <p><strong>Ripiano:</strong> <?php echo e($libro['numero_ripiano']); ?></p>
-                    <?php endif; ?>
-                    <p><strong>Disponibilità:</strong> 
-                        <span class="badge <?php echo $libro['copie_disponibili'] > 0 ? 'badge-success' : 'badge-danger'; ?>">
-                            <?php echo $libro['copie_disponibili']; ?>/<?php echo $libro['numero_copie']; ?> disponibili
-                        </span>
-                    </p>
-                </div>
-            </div>
-            
-            <?php if ($libro['trama']): ?>
-                <div style="margin-top: 20px; padding-top: 20px; border-top: 2px solid var(--light-bg);">
-                    <strong>Descrizione:</strong>
-                    <p><?php echo nl2br(e($libro['trama'])); ?></p>
-                </div>
-            <?php endif; ?>
-            
-            <!-- Azioni basate su ruolo -->
-            <div style="margin-top: 30px; text-align: center;">
-                <?php if ($azione === 'assegnazione' && $is_bibliotecario): ?>
-                    <div class="alert alert-info">
-                        <strong>📦 Libro Disponibile</strong><br>
-                        Questo libro è libero e può essere assegnato a uno studente.
-                    </div>
-                    <a href="../admin/gestione_prestiti.php" class="btn btn-primary">
-                        Vai a Gestione Prestiti
-                    </a>
-                    
-                <?php elseif ($azione === 'restituzione' && $is_bibliotecario): ?>
-                    <div class="alert alert-warning">
-                        <strong>📚 Libro in Prestito</strong><br>
-                        Attualmente in prestito a: <strong><?php echo e($prestito_attivo['nome'] . ' ' . $prestito_attivo['cognome']); ?></strong><br>
-                        Scadenza: <?php echo formatData($prestito_attivo['data_scadenza']); ?>
-                    </div>
-                    <a href="../admin/gestione_prestiti.php" class="btn btn-success">
-                        Gestisci Restituzione
-                    </a>
-                    
-                <?php elseif ($azione === 'visualizza'): ?>
-                    <?php if ($libro['copie_disponibili'] > 0 && !$user['in_blacklist']): ?>
-                        <div class="alert alert-success">
-                            <strong>✅ Libro Disponibile</strong><br>
-                            Puoi prenotare questo libro!
-                        </div>
-                        <button onclick="prenotaLibro(<?php echo $libro['id']; ?>)" class="btn btn-primary">
-                            📦 Prenota Ora
-                        </button>
-                    <?php elseif ($libro['copie_disponibili'] == 0): ?>
-                        <div class="alert alert-danger">
-                            <strong>❌ Libro Non Disponibile</strong><br>
-                            Tutte le copie sono attualmente in prestito.
-                        </div>
-                        <button onclick="richiediNotifica(<?php echo $libro['id']; ?>)" class="btn btn-warning">
-                            🔔 Avvisami quando Disponibile
-                        </button>
-                    <?php else: ?>
-                        <div class="alert alert-danger">
-                            <strong>⚠️ Non puoi prenotare</strong><br>
-                            Sei in blacklist. Restituisci i materiali in prestito.
-                        </div>
-                    <?php endif; ?>
                 <?php endif; ?>
             </div>
-            
-            <div style="margin-top: 20px; text-align: center;">
-                <a href="catalogo.php" class="btn btn-secondary">← Torna al Catalogo</a>
+
+            <div class="book-detail-info">
+                <h1 class="book-detail-title"><?= htmlspecialchars($libro['titolo']) ?></h1>
+                <p class="book-detail-author">
+                    <i class="fas fa-user"></i> <?= htmlspecialchars($libro['autore'] ?: 'Autore sconosciuto') ?>
+                </p>
+
+                <!-- Disponibilità -->
+                <div class="availability-box <?= $disponibili > 0 ? 'available' : 'unavailable' ?>">
+                    <div class="availability-status">
+                        <i class="fas fa-<?= $disponibili > 0 ? 'check-circle' : 'times-circle' ?>"></i>
+                        <strong><?= $disponibili > 0 ? 'Disponibile' : 'Non disponibile' ?></strong>
+                    </div>
+                    <div class="availability-count">
+                        <?= $disponibili ?> di <?= $totCopie ?> <?= $totCopie === 1 ? 'copia' : 'copie' ?> disponibil<?= $disponibili === 1 ? 'e' : 'i' ?>
+                    </div>
+                </div>
+
+                <!-- Azioni -->
+                <div class="book-actions">
+                    <?php if ($inBlacklistUtente): ?>
+                    <div class="alert alert-danger" style="margin: 0;">
+                        <i class="fas fa-ban"></i> Sei in blacklist. Non puoi prenotare.
+                    </div>
+                    <?php elseif ($disponibili > 0 && $puoPrenotareUtente): ?>
+                    <form method="POST" style="display:inline;">
+                        <input type="hidden" name="azione" value="prenota">
+                        <button type="submit" class="btn btn-primary btn-lg" onclick="return confirm('Confermi la prenotazione di questo libro?')">
+                            <i class="fas fa-bookmark"></i> Prenota questo libro
+                        </button>
+                    </form>
+                    <?php elseif ($disponibili > 0 && !$puoPrenotareUtente): ?>
+                    <div class="alert alert-warning" style="margin: 0;">
+                        <i class="fas fa-exclamation-triangle"></i> Hai raggiunto il limite di prestiti.
+                    </div>
+                    <?php else: ?>
+                    <form method="POST" style="display:inline;">
+                        <input type="hidden" name="azione" value="notifica">
+                        <button type="submit" class="btn btn-warning btn-lg">
+                            <i class="fas fa-bell"></i> Avvisami quando disponibile
+                        </button>
+                    </form>
+                    <?php endif; ?>
+                </div>
+
+                <!-- Metadata tabella -->
+                <div class="book-metadata">
+                    <table class="metadata-table">
+                        <?php if ($libro['casa_editrice']): ?>
+                        <tr>
+                            <th><i class="fas fa-building"></i> Casa Editrice</th>
+                            <td><?= htmlspecialchars($libro['casa_editrice']) ?></td>
+                        </tr>
+                        <?php endif; ?>
+                        <?php if ($libro['anno_pubblicazione']): ?>
+                        <tr>
+                            <th><i class="fas fa-calendar"></i> Anno</th>
+                            <td><?= (int)$libro['anno_pubblicazione'] ?></td>
+                        </tr>
+                        <?php endif; ?>
+                        <?php if ($libro['lingua']): ?>
+                        <tr>
+                            <th><i class="fas fa-globe"></i> Lingua</th>
+                            <td><?= htmlspecialchars($libro['lingua']) ?></td>
+                        </tr>
+                        <?php endif; ?>
+                        <?php if ($libro['genere']): ?>
+                        <tr>
+                            <th><i class="fas fa-tag"></i> Genere</th>
+                            <td><span class="badge badge-info"><?= htmlspecialchars($libro['genere']) ?></span></td>
+                        </tr>
+                        <?php endif; ?>
+                        <?php if ($libro['tipologia']): ?>
+                        <tr>
+                            <th><i class="fas fa-layer-group"></i> Tipologia</th>
+                            <td><?= htmlspecialchars(ucfirst($libro['tipologia'])) ?></td>
+                        </tr>
+                        <?php endif; ?>
+                        <?php if ($libro['isbn']): ?>
+                        <tr>
+                            <th><i class="fas fa-barcode"></i> ISBN</th>
+                            <td><code><?= htmlspecialchars($libro['isbn']) ?></code></td>
+                        </tr>
+                        <?php endif; ?>
+                        <?php if ($libro['codice_dewey']): ?>
+                        <tr>
+                            <th><i class="fas fa-hashtag"></i> Codice Dewey</th>
+                            <td><code><?= htmlspecialchars($libro['codice_dewey']) ?></code></td>
+                        </tr>
+                        <?php endif; ?>
+                    </table>
+                </div>
             </div>
         </div>
+
+        <!-- Trama -->
+        <?php if (!empty($libro['trama'])): ?>
+        <div class="card">
+            <div class="card-header">
+                <h2><i class="fas fa-align-left"></i> Trama</h2>
+            </div>
+            <div class="card-body">
+                <p class="book-description"><?= nl2br(htmlspecialchars($libro['trama'])) ?></p>
+            </div>
+        </div>
+        <?php endif; ?>
+
+        <!-- Elenco copie (solo per bibliotecari/admin) -->
+        <?php if ($user['livello'] >= LIVELLO_BIBLIOTECARIO && !empty($copie)): ?>
+        <div class="card">
+            <div class="card-header">
+                <h2><i class="fas fa-copy"></i> Elenco Copie</h2>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>QR Code</th>
+                                <th>Stato</th>
+                                <th>Posizione</th>
+                                <th>Note</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($copie as $copia): ?>
+                            <tr>
+                                <td><?= (int)$copia['numero_copia'] ?></td>
+                                <td><code><?= htmlspecialchars($copia['qr_code_univoco'] ?? '-') ?></code></td>
+                                <td>
+                                    <?php
+                                    $statoBadge = match($copia['stato']) {
+                                        'disponibile' => 'badge-success',
+                                        'in_prestito' => 'badge-warning',
+                                        'prenotato' => 'badge-info',
+                                        'danneggiato' => 'badge-danger',
+                                        'smarrito' => 'badge-danger',
+                                        default => 'badge-light'
+                                    };
+                                    ?>
+                                    <span class="badge <?= $statoBadge ?>"><?= htmlspecialchars(ucfirst(str_replace('_', ' ', $copia['stato']))) ?></span>
+                                </td>
+                                <td>
+                                    <?php
+                                    $posizione = [];
+                                    if (!empty($copia['numero_aula'])) $posizione[] = 'Aula ' . htmlspecialchars($copia['numero_aula']);
+                                    if (!empty($copia['numero_armadio'])) $posizione[] = 'Arm. ' . htmlspecialchars($copia['numero_armadio']);
+                                    if (!empty($copia['numero_ripiano'])) $posizione[] = 'Rip. ' . htmlspecialchars($copia['numero_ripiano']);
+                                    echo !empty($posizione) ? implode(', ', $posizione) : '<span class="text-muted">-</span>';
+                                    ?>
+                                </td>
+                                <td><?= htmlspecialchars($copia['note_danno'] ?? '-') ?></td>
+                            </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        <?php endif; ?>
     </div>
-    
-    <script src="../assets/js/main.js"></script>
-</body>
-</html>
+</div>
+
+<?php include __DIR__ . '/../includes/footer.php'; ?>

@@ -1,289 +1,187 @@
 <?php
 /**
- * Statistiche - Biblioteca Gobetti (Admin+)
+ * Statistiche - Biblioteca Gobetti
+ * Dashboard con statistiche della biblioteca
  */
 
-require_once '../includes/functions.php';
+require_once __DIR__ . '/../includes/auth.php';
+require_once __DIR__ . '/../includes/functions.php';
 requireMinLevel(LIVELLO_BIBLIOTECARIO);
 
-$db = getDB();
+$currentUser = getCurrentUser();
+$baseUrl = getBaseUrl();
+$stats = getStatistiche();
 
-// Statistiche generali
-$stats = [];
+// Calcolo max per le barre del grafico
+$maxPrestitiMese = 0;
+foreach ($stats['prestiti_per_mese'] as $pm) {
+    if ((int)$pm['num'] > $maxPrestitiMese) {
+        $maxPrestitiMese = (int)$pm['num'];
+    }
+}
 
-// Utenti
-$stats['totale_utenti'] = $db->query("SELECT COUNT(*) as c FROM utenti WHERE attivo = 1")->fetch()['c'];
-$stats['utenti_blacklist'] = $db->query("SELECT COUNT(*) as c FROM utenti WHERE in_blacklist = 1")->fetch()['c'];
-$stats['studenti'] = $db->query("SELECT COUNT(*) as c FROM utenti WHERE livello = 100 AND attivo = 1")->fetch()['c'];
-$stats['docenti'] = $db->query("SELECT COUNT(*) as c FROM utenti WHERE livello = 300 AND attivo = 1")->fetch()['c'];
-
-// Libri
-$stats['totale_libri'] = $db->query("SELECT COUNT(*) as c FROM libri")->fetch()['c'];
-$stats['libri_disponibili'] = $db->query("SELECT COUNT(*) as c FROM libri WHERE copie_disponibili > 0")->fetch()['c'];
-$stats['totale_copie'] = $db->query("SELECT SUM(numero_copie) as s FROM libri")->fetch()['s'] ?: 0;
-$stats['copie_disponibili'] = $db->query("SELECT SUM(copie_disponibili) as s FROM libri")->fetch()['s'] ?: 0;
-
-// Prestiti
-$stats['prestiti_attivi'] = $db->query("SELECT COUNT(*) as c FROM prestiti WHERE stato IN ('attivo', 'in_ritardo')")->fetch()['c'];
-$stats['prestiti_in_ritardo'] = $db->query("SELECT COUNT(*) as c FROM prestiti WHERE stato = 'in_ritardo'")->fetch()['c'];
-$stats['prestiti_totali'] = $db->query("SELECT COUNT(*) as c FROM prestiti")->fetch()['c'];
-$stats['prestiti_restituiti'] = $db->query("SELECT COUNT(*) as c FROM prestiti WHERE stato = 'restituito'")->fetch()['c'];
-
-// Prenotazioni
-$stats['prenotazioni_attive'] = $db->query("SELECT COUNT(*) as c FROM prenotazioni WHERE stato = 'attiva'")->fetch()['c'];
-$stats['prenotazioni_scadute'] = $db->query("SELECT COUNT(*) as c FROM prenotazioni WHERE stato = 'scaduta'")->fetch()['c'];
-
-// Libri più prestati
-$libri_popolari = $db->query("
-    SELECT l.titolo, l.autore, COUNT(p.id) as volte_prestato
-    FROM prestiti p
-    JOIN libri l ON p.libro_id = l.id
-    GROUP BY l.id
-    ORDER BY volte_prestato DESC
-    LIMIT 10
-")->fetchAll();
-
-// Utenti più attivi
-$utenti_attivi = $db->query("
-    SELECT u.nome, u.cognome, COUNT(p.id) as prestiti_totali
-    FROM prestiti p
-    JOIN utenti u ON p.utente_id = u.id
-    GROUP BY u.id
-    ORDER BY prestiti_totali DESC
-    LIMIT 10
-")->fetchAll();
-
-// Statistiche per mese (ultimi 6 mesi)
-$stats_mensili = $db->query("
-    SELECT 
-        DATE_FORMAT(data_ritiro, '%Y-%m') as mese,
-        COUNT(*) as prestiti
-    FROM prestiti
-    WHERE data_ritiro >= DATE_SUB(NOW(), INTERVAL 6 MONTH)
-    GROUP BY DATE_FORMAT(data_ritiro, '%Y-%m')
-    ORDER BY mese DESC
-")->fetchAll();
-
-// Generi più popolari
-$generi_popolari = $db->query("
-    SELECT l.genere, COUNT(p.id) as prestiti
-    FROM prestiti p
-    JOIN libri l ON p.libro_id = l.id
-    WHERE l.genere IS NOT NULL
-    GROUP BY l.genere
-    ORDER BY prestiti DESC
-    LIMIT 5
-")->fetchAll();
-
-// Distribuzione per livello utente
-$livelli_dist = $db->query("
-    SELECT 
-        CASE 
-            WHEN livello = 100 THEN 'Studenti'
-            WHEN livello = 300 THEN 'Docenti'
-            WHEN livello = 320 THEN 'Bibliotecari'
-            WHEN livello >= 600 THEN 'Amministrativi'
-            ELSE 'Altri'
-        END as categoria,
-        COUNT(*) as numero
-    FROM utenti
-    WHERE attivo = 1
-    GROUP BY categoria
-")->fetchAll();
+require_once __DIR__ . '/../includes/header.php';
 ?>
-<!DOCTYPE html>
-<html lang="it">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Statistiche - Biblioteca Gobetti</title>
-    <link rel="stylesheet" href="../assets/css/style.css">
-</head>
-<body data-livello="<?php echo $_SESSION['livello']; ?>">
-    <?php include '../includes/header.php'; ?>
-    
-    <div class="container">
-        <h2>📊 Statistiche Biblioteca</h2>
-        
-        <!-- Statistiche Generali -->
-        <div class="dashboard-grid">
-            <div class="stat-card">
-                <div class="stat-number"><?php echo $stats['totale_utenti']; ?></div>
-                <div class="stat-label">Utenti Attivi</div>
-            </div>
-            
-            <div class="stat-card success">
-                <div class="stat-number"><?php echo $stats['totale_libri']; ?></div>
-                <div class="stat-label">Titoli in Catalogo</div>
-            </div>
-            
-            <div class="stat-card warning">
-                <div class="stat-number"><?php echo $stats['prestiti_attivi']; ?></div>
-                <div class="stat-label">Prestiti Attivi</div>
-            </div>
-            
-            <div class="stat-card danger">
-                <div class="stat-number"><?php echo $stats['prestiti_in_ritardo']; ?></div>
-                <div class="stat-label">Prestiti in Ritardo</div>
-            </div>
+
+<div class="container">
+    <div class="card" style="margin-bottom: var(--space-6);">
+        <div class="card-header">
+            <h2><i class="fas fa-chart-bar"></i> Statistiche Biblioteca</h2>
         </div>
-        
-        <!-- Dettagli -->
-        <div class="form-row" style="align-items: stretch;">
-            <div class="card" style="flex: 1;">
-                <div class="card-header">
-                    <h3 class="card-title">👥 Utenti</h3>
+        <div class="card-body">
+
+            <!-- Overview cards -->
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--space-4); margin-bottom: var(--space-8);">
+                <div class="stat-card" style="text-align: center; padding: var(--space-6);">
+                    <div style="font-size: var(--font-size-3xl); font-weight: 700; color: var(--primary);">
+                        <?= (int)$stats['totale_libri'] ?>
+                    </div>
+                    <div style="color: var(--gray-600); font-size: var(--font-size-sm);">Libri totali</div>
                 </div>
-                <p><strong>Studenti:</strong> <?php echo $stats['studenti']; ?></p>
-                <p><strong>Docenti:</strong> <?php echo $stats['docenti']; ?></p>
-                <p><strong>In Blacklist:</strong> <span class="badge badge-danger"><?php echo $stats['utenti_blacklist']; ?></span></p>
-            </div>
-            
-            <div class="card" style="flex: 1;">
-                <div class="card-header">
-                    <h3 class="card-title">📚 Libri</h3>
+                <div class="stat-card" style="text-align: center; padding: var(--space-6);">
+                    <div style="font-size: var(--font-size-3xl); font-weight: 700; color: var(--info);">
+                        <?= (int)$stats['totale_copie'] ?>
+                    </div>
+                    <div style="color: var(--gray-600); font-size: var(--font-size-sm);">Copie totali</div>
                 </div>
-                <p><strong>Totale Copie:</strong> <?php echo $stats['totale_copie']; ?></p>
-                <p><strong>Copie Disponibili:</strong> <span class="badge badge-success"><?php echo $stats['copie_disponibili']; ?></span></p>
-                <p><strong>Tasso Utilizzo:</strong> <?php echo $stats['totale_copie'] > 0 ? round((($stats['totale_copie'] - $stats['copie_disponibili']) / $stats['totale_copie']) * 100, 1) : 0; ?>%</p>
-            </div>
-            
-            <div class="card" style="flex: 1;">
-                <div class="card-header">
-                    <h3 class="card-title">📖 Prestiti</h3>
+                <div class="stat-card" style="text-align: center; padding: var(--space-6);">
+                    <div style="font-size: var(--font-size-3xl); font-weight: 700; color: var(--success);">
+                        <?= max(0, (int)$stats['copie_disponibili']) ?>
+                    </div>
+                    <div style="color: var(--gray-600); font-size: var(--font-size-sm);">Copie disponibili</div>
                 </div>
-                <p><strong>Totali:</strong> <?php echo $stats['prestiti_totali']; ?></p>
-                <p><strong>Restituiti:</strong> <?php echo $stats['prestiti_restituiti']; ?></p>
-                <p><strong>Tasso Restituzione:</strong> <?php echo $stats['prestiti_totali'] > 0 ? round(($stats['prestiti_restituiti'] / $stats['prestiti_totali']) * 100, 1) : 0; ?>%</p>
-            </div>
-        </div>
-        
-        <!-- Libri Più Prestati -->
-        <div class="card">
-            <div class="card-header">
-                <h3 class="card-title">🏆 Top 10 Libri Più Prestati</h3>
-            </div>
-            <div class="table-container">
-                <table class="table">
-                    <thead>
-                        <tr>
-                            <th>#</th>
-                            <th>Titolo</th>
-                            <th>Autore</th>
-                            <th>Prestiti</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php $pos = 1; foreach ($libri_popolari as $libro): ?>
-                            <tr>
-                                <td><strong><?php echo $pos++; ?></strong></td>
-                                <td><?php echo e($libro['titolo']); ?></td>
-                                <td><?php echo e($libro['autore'] ?: '-'); ?></td>
-                                <td><span class="badge badge-info"><?php echo $libro['volte_prestato']; ?></span></td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-        
-        <!-- Utenti Più Attivi -->
-        <div class="card">
-            <div class="card-header">
-                <h3 class="card-title">👤 Top 10 Utenti Più Attivi</h3>
-            </div>
-            <div class="table-container">
-                <table class="table">
-                    <thead>
-                        <tr>
-                            <th>#</th>
-                            <th>Nome</th>
-                            <th>Prestiti Totali</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php $pos = 1; foreach ($utenti_attivi as $utente): ?>
-                            <tr>
-                                <td><strong><?php echo $pos++; ?></strong></td>
-                                <td><?php echo e($utente['nome'] . ' ' . $utente['cognome']); ?></td>
-                                <td><span class="badge badge-success"><?php echo $utente['prestiti_totali']; ?></span></td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-        
-        <!-- Generi Più Popolari -->
-        <?php if (!empty($generi_popolari)): ?>
-            <div class="card">
-                <div class="card-header">
-                    <h3 class="card-title">📚 Generi Più Popolari</h3>
+                <div class="stat-card" style="text-align: center; padding: var(--space-6);">
+                    <div style="font-size: var(--font-size-3xl); font-weight: 700; color: var(--warning);">
+                        <?= (int)$stats['prestiti_attivi'] ?>
+                    </div>
+                    <div style="color: var(--gray-600); font-size: var(--font-size-sm);">Prestiti attivi</div>
                 </div>
-                <div class="table-container">
-                    <table class="table">
-                        <thead>
-                            <tr>
-                                <th>Genere</th>
-                                <th>Prestiti</th>
-                                <th>Percentuale</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php 
-                            $totale_generi = array_sum(array_column($generi_popolari, 'prestiti'));
-                            foreach ($generi_popolari as $genere): 
-                                $perc = $totale_generi > 0 ? round(($genere['prestiti'] / $totale_generi) * 100, 1) : 0;
-                            ?>
-                                <tr>
-                                    <td><?php echo e($genere['genere']); ?></td>
-                                    <td><span class="badge badge-info"><?php echo $genere['prestiti']; ?></span></td>
-                                    <td>
-                                        <div style="background: var(--light-bg); border-radius: 10px; overflow: hidden; height: 20px;">
-                                            <div style="background: var(--secondary-color); height: 100%; width: <?php echo $perc; ?>%;"></div>
-                                        </div>
-                                        <?php echo $perc; ?>%
-                                    </td>
-                                </tr>
+                <div class="stat-card" style="text-align: center; padding: var(--space-6);">
+                    <div style="font-size: var(--font-size-3xl); font-weight: 700; color: var(--danger);">
+                        <?= (int)$stats['utenti_blacklist'] ?>
+                    </div>
+                    <div style="color: var(--gray-600); font-size: var(--font-size-sm);">Utenti in blacklist</div>
+                </div>
+                <div class="stat-card" style="text-align: center; padding: var(--space-6);">
+                    <div style="font-size: var(--font-size-3xl); font-weight: 700; color: var(--success-dark);">
+                        <?= $stats['tasso_restituzione'] ?>%
+                    </div>
+                    <div style="color: var(--gray-600); font-size: var(--font-size-sm);">Tasso restituzione</div>
+                </div>
+            </div>
+
+            <!-- Grafico prestiti per mese -->
+            <div class="card" style="margin-bottom: var(--space-6);">
+                <div class="card-header">
+                    <h3><i class="fas fa-chart-line"></i> Prestiti per mese (ultimi 6 mesi)</h3>
+                </div>
+                <div class="card-body">
+                    <?php if (empty($stats['prestiti_per_mese'])): ?>
+                        <p style="text-align: center; color: var(--gray-600);">Nessun dato disponibile.</p>
+                    <?php else: ?>
+                        <div style="display: flex; align-items: flex-end; gap: var(--space-4); height: 250px; padding: var(--space-4) 0;">
+                            <?php foreach ($stats['prestiti_per_mese'] as $pm): ?>
+                                <?php
+                                    $altezza = $maxPrestitiMese > 0 ? round(((int)$pm['num'] / $maxPrestitiMese) * 200) : 0;
+                                    $mesiNomi = ['01'=>'Gen','02'=>'Feb','03'=>'Mar','04'=>'Apr','05'=>'Mag','06'=>'Giu','07'=>'Lug','08'=>'Ago','09'=>'Set','10'=>'Ott','11'=>'Nov','12'=>'Dic'];
+                                    $parti = explode('-', $pm['mese']);
+                                    $nomeMese = ($mesiNomi[$parti[1] ?? ''] ?? $parti[1] ?? '') . ' ' . ($parti[0] ?? '');
+                                ?>
+                                <div style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end;">
+                                    <div style="font-weight: 700; margin-bottom: var(--space-2); font-size: var(--font-size-sm);">
+                                        <?= (int)$pm['num'] ?>
+                                    </div>
+                                    <div style="width: 100%; max-width: 60px; height: <?= max(4, $altezza) ?>px; background: var(--primary); border-radius: var(--border-radius-sm) var(--border-radius-sm) 0 0; transition: height var(--transition);">
+                                    </div>
+                                    <div style="font-size: var(--font-size-xs); color: var(--gray-600); margin-top: var(--space-2); text-align: center;">
+                                        <?= htmlspecialchars($nomeMese) ?>
+                                    </div>
+                                </div>
                             <?php endforeach; ?>
-                        </tbody>
-                    </table>
+                        </div>
+                    <?php endif; ?>
                 </div>
             </div>
-        <?php endif; ?>
-        
-        <!-- Andamento Mensile -->
-        <?php if (!empty($stats_mensili)): ?>
-            <div class="card">
-                <div class="card-header">
-                    <h3 class="card-title">📈 Andamento Prestiti (Ultimi 6 Mesi)</h3>
+
+            <!-- Due colonne: Libri più prestati e Studenti più attivi -->
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: var(--space-6);">
+
+                <!-- Libri più prestati -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3><i class="fas fa-trophy"></i> Libri più prestati</h3>
+                    </div>
+                    <div class="card-body">
+                        <?php if (empty($stats['libri_piu_prenotati'])): ?>
+                            <p style="text-align: center; color: var(--gray-600);">Nessun dato.</p>
+                        <?php else: ?>
+                            <div class="table-container">
+                                <table class="table">
+                                    <thead>
+                                        <tr>
+                                            <th>#</th>
+                                            <th>Libro</th>
+                                            <th class="text-center">Prestiti</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                    <?php foreach ($stats['libri_piu_prenotati'] as $i => $lp): ?>
+                                        <tr>
+                                            <td><?= $i + 1 ?></td>
+                                            <td>
+                                                <strong><?= htmlspecialchars($lp['titolo']) ?></strong><br>
+                                                <small style="color: var(--gray-600);"><?= htmlspecialchars($lp['autore'] ?? '') ?></small>
+                                            </td>
+                                            <td class="text-center">
+                                                <span class="badge badge-primary"><?= (int)$lp['num_prestiti'] ?></span>
+                                            </td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                    </tbody>
+                                </table>
+                            </div>
+                        <?php endif; ?>
+                    </div>
                 </div>
-                <div class="table-container">
-                    <table class="table">
-                        <thead>
-                            <tr>
-                                <th>Mese</th>
-                                <th>Prestiti</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php foreach ($stats_mensili as $mese): ?>
-                                <tr>
-                                    <td><?php echo date('F Y', strtotime($mese['mese'] . '-01')); ?></td>
-                                    <td><span class="badge badge-primary"><?php echo $mese['prestiti']; ?></span></td>
-                                </tr>
-                            <?php endforeach; ?>
-                        </tbody>
-                    </table>
+
+                <!-- Studenti più attivi -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3><i class="fas fa-user-graduate"></i> Utenti più attivi</h3>
+                    </div>
+                    <div class="card-body">
+                        <?php if (empty($stats['studenti_attivi'])): ?>
+                            <p style="text-align: center; color: var(--gray-600);">Nessun dato.</p>
+                        <?php else: ?>
+                            <div class="table-container">
+                                <table class="table">
+                                    <thead>
+                                        <tr>
+                                            <th>#</th>
+                                            <th>Utente</th>
+                                            <th class="text-center">Prestiti</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                    <?php foreach ($stats['studenti_attivi'] as $i => $sa): ?>
+                                        <tr>
+                                            <td><?= $i + 1 ?></td>
+                                            <td><strong><?= htmlspecialchars(($sa['cognome'] ?? '') . ' ' . ($sa['nome'] ?? '')) ?></strong></td>
+                                            <td class="text-center">
+                                                <span class="badge badge-primary"><?= (int)$sa['num_prestiti'] ?></span>
+                                            </td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                    </tbody>
+                                </table>
+                            </div>
+                        <?php endif; ?>
+                    </div>
                 </div>
             </div>
-        <?php endif; ?>
-        
-        <div style="margin-top: 30px; text-align: center;">
-            <a href="../user/dashboard.php" class="btn btn-secondary">← Torna alla Dashboard</a>
+
         </div>
     </div>
-    
-    <script src="../assets/js/main.js"></script>
-</body>
-</html>
+</div>
+
+<?php require_once __DIR__ . '/../includes/footer.php'; ?>

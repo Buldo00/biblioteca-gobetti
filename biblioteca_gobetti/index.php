@@ -85,8 +85,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <small>Account di test (password: <code>password123</code>):</small>
                 <div class="test-accounts">
                     <span class="badge badge-info">s.adam.aachir@gobettire.istruzioneer.it (Studente)</span>
+                    <span class="badge badge-info">s.asedik.aachir@gobettire.istruzioneer.it (Bibliotecario)</span>
                     <span class="badge badge-info">emanuela.franchini@gobettire.istruzioneer.it (Docente)</span>
-                    <span class="badge badge-info">michele.romei@gobettire.istruzioneer.it (Bibliotecario)</span>
                     <span class="badge badge-info">s.simone.guidetti@gobettire.istruzioneer.it (Admin)</span>
                 </div>
             </div>

@@ -18,8 +18,11 @@ SET time_zone = "+00:00";
 /*!40101 SET NAMES utf8mb4 */;
 
 --
--- Database: `vr5av337_gobettiservicesprova`
+-- Database: `gobettiservicesprova`
 --
+
+CREATE DATABASE IF NOT EXISTS `gobettiservicesprova` DEFAULT CHARACTER SET utf8 COLLATE utf8_unicode_ci;
+USE `gobettiservicesprova`;
 
 -- --------------------------------------------------------
 
@@ -51995,6 +51998,7 @@ COMMIT;
 /*!40101 SET CHARACTER_SET_RESULTS=@OLD_CHARACTER_SET_RESULTS */;
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
 
+
 -- ============================================
 -- MODULO BIBLIOTECA GOBETTI
 -- Aggiunta tabelle e dati per la gestione
@@ -52004,43 +52008,55 @@ COMMIT;
 -- -------------------------------------------------
 -- 1. Aggiunta livello Bibliotecario a tipolivelli
 -- -------------------------------------------------
-INSERT INTO `tipolivelli` (`IDTipoAccount`, `livelloAccount`, `tipologiaAccount`, `base`, `descrizioneAccount`) VALUES
+INSERT IGNORE INTO `tipolivelli` (`IDTipoAccount`, `livelloAccount`, `tipologiaAccount`, `base`, `descrizioneAccount`) VALUES
 (70, 320, 'Bibliotecario', 1, 'Gestione biblioteca scolastica');
 
 -- -------------------------------------------------
 -- 2. Aggiunta colonna password alla tabella utenti
 -- -------------------------------------------------
-ALTER TABLE `utenti` ADD COLUMN `passwordUtente` VARCHAR(255) COLLATE utf8_unicode_ci DEFAULT NULL AFTER `emailPers`;
+SET @dbname = DATABASE();
+SET @tablename = 'utenti';
+SET @columnname = 'passwordUtente';
+SET @preparedStatement = (SELECT IF(
+  (
+    SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA = @dbname
+    AND TABLE_NAME = @tablename
+    AND COLUMN_NAME = @columnname
+  ) > 0,
+  'SELECT 1',
+  CONCAT('ALTER TABLE `utenti` ADD COLUMN `passwordUtente` VARCHAR(255) COLLATE utf8_unicode_ci DEFAULT NULL AFTER `emailPers`')
+));
+PREPARE alterIfNotExists FROM @preparedStatement;
+EXECUTE alterIfNotExists;
+DEALLOCATE PREPARE alterIfNotExists;
 
 -- -------------------------------------------------
--- 3. Password di test per alcuni utenti esistenti
+-- 3. Password di test (password123) per account di test
 -- -------------------------------------------------
--- password123 = bcrypt hash
-UPDATE `utenti` SET `passwordUtente` = '$2y$10$tUG8c92wxjjnID1RM9UQgeUtLHmBk923DAEF2B0c4I9f9D/7PwImi' WHERE `IDUtente` IN (1, 2, 3, 18, 651);
+-- hash bcrypt di "password123"
+UPDATE `utenti` SET `passwordUtente` = '$2y$10$tUG8c92wxjjnID1RM9UQgeUtLHmBk923DAEF2B0c4I9f9D/7PwImi'
+  WHERE `IDUtente` IN (1, 2, 1386, 651);
 
 -- -------------------------------------------------
--- 4. Assegnazione ruoli admin e bibliotecario
+-- 4. Assegnazione ruoli di test
 -- -------------------------------------------------
 
--- Assign user 651 (Simone Guidetti from profili) as admin (level 999/Master = IDTipoAccount 34)
-INSERT INTO `utenti_tipolivelli` (`IDUtente_livello`, `idUtente`, `idLivello`) VALUES
-(2600, 651, 34);
+-- Studente (IDUtente=1): già Studente (idLivello=1, level=100) ✓
 
--- Assign user 1379 (Michele Romei from profili) as Bibliotecario (level 320 = IDTipoAccount 70)
-INSERT INTO `utenti_tipolivelli` (`IDUtente_livello`, `idUtente`, `idLivello`) VALUES
-(2601, 1379, 70);
+-- Docente (IDUtente=1386, Emanuela Franchini): già Docente (idLivello=8, level=300) ✓
 
--- Set passwords for profili users too (password123)
-UPDATE `utenti` SET `passwordUtente` = '$2y$10$tUG8c92wxjjnID1RM9UQgeUtLHmBk923DAEF2B0c4I9f9D/7PwImi' WHERE `IDUtente` IN (1379, 1386, 1390, 1391, 1394, 1399, 651, 2011, 2012, 2013);
+-- Bibliotecario (IDUtente=2, Asedik Aachir): aggiunge solo idLivello=70 (level=320)
+-- Massimo livello diventa 320 = Bibliotecario
+INSERT IGNORE INTO `utenti_tipolivelli` (`IDUtente_livello`, `idUtente`, `idLivello`) VALUES
+(2602, 2, 70);
 
--- ============================================
--- MODULO BIBLIOTECA GOBETTI - TABELLE
--- ============================================
+-- Admin (IDUtente=651, Simone Guidetti): già Master (idLivello=34, level=999) ✓
 
 -- -------------------------------------------------
 -- 5. Tabella libri
 -- -------------------------------------------------
-CREATE TABLE `biblioteca_libri` (
+CREATE TABLE IF NOT EXISTS `biblioteca_libri` (
   `id_libro` INT(10) UNSIGNED NOT NULL AUTO_INCREMENT,
   `titolo` VARCHAR(255) NOT NULL,
   `autore` VARCHAR(255) NOT NULL,
@@ -52066,7 +52082,7 @@ CREATE TABLE `biblioteca_libri` (
 -- -------------------------------------------------
 -- 6. Tabella copie fisiche dei libri
 -- -------------------------------------------------
-CREATE TABLE `biblioteca_copie` (
+CREATE TABLE IF NOT EXISTS `biblioteca_copie` (
   `id_copia` INT(10) UNSIGNED NOT NULL AUTO_INCREMENT,
   `id_libro` INT(10) UNSIGNED NOT NULL,
   `numero_copia` INT(5) UNSIGNED NOT NULL DEFAULT 1,
@@ -52087,7 +52103,7 @@ CREATE TABLE `biblioteca_copie` (
 -- -------------------------------------------------
 -- 7. Tabella prenotazioni
 -- -------------------------------------------------
-CREATE TABLE `biblioteca_prenotazioni` (
+CREATE TABLE IF NOT EXISTS `biblioteca_prenotazioni` (
   `id_prenotazione` INT(10) UNSIGNED NOT NULL AUTO_INCREMENT,
   `id_utente` INT(10) UNSIGNED NOT NULL,
   `id_libro` INT(10) UNSIGNED NOT NULL,
@@ -52110,7 +52126,7 @@ CREATE TABLE `biblioteca_prenotazioni` (
 -- -------------------------------------------------
 -- 8. Tabella prestiti
 -- -------------------------------------------------
-CREATE TABLE `biblioteca_prestiti` (
+CREATE TABLE IF NOT EXISTS `biblioteca_prestiti` (
   `id_prestito` INT(10) UNSIGNED NOT NULL AUTO_INCREMENT,
   `id_prenotazione` INT(10) UNSIGNED DEFAULT NULL,
   `id_utente` INT(10) UNSIGNED NOT NULL,
@@ -52137,7 +52153,7 @@ CREATE TABLE `biblioteca_prestiti` (
 -- -------------------------------------------------
 -- 9. Tabella blacklist utenti
 -- -------------------------------------------------
-CREATE TABLE `biblioteca_blacklist` (
+CREATE TABLE IF NOT EXISTS `biblioteca_blacklist` (
   `id_blacklist` INT(10) UNSIGNED NOT NULL AUTO_INCREMENT,
   `id_utente` INT(10) UNSIGNED NOT NULL,
   `motivo` TEXT NOT NULL,
@@ -52153,7 +52169,7 @@ CREATE TABLE `biblioteca_blacklist` (
 -- -------------------------------------------------
 -- 10. Tabella impostazioni biblioteca
 -- -------------------------------------------------
-CREATE TABLE `biblioteca_settings` (
+CREATE TABLE IF NOT EXISTS `biblioteca_settings` (
   `id_setting` INT(10) UNSIGNED NOT NULL AUTO_INCREMENT,
   `chiave` VARCHAR(100) NOT NULL,
   `valore` TEXT DEFAULT NULL,
@@ -52166,7 +52182,7 @@ CREATE TABLE `biblioteca_settings` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci;
 
 -- Default settings
-INSERT INTO `biblioteca_settings` (`chiave`, `valore`, `tipo`, `descrizione`) VALUES
+INSERT IGNORE INTO `biblioteca_settings` (`chiave`, `valore`, `tipo`, `descrizione`) VALUES
 ('max_prestiti_studente', '3', 'int', 'Numero massimo di prestiti attivi per studente'),
 ('max_prestiti_docente', '3', 'int', 'Numero massimo di prestiti attivi per docente'),
 ('giorni_ritiro', '3', 'int', 'Giorni disponibili per il ritiro dopo la prenotazione'),
@@ -52180,7 +52196,7 @@ INSERT INTO `biblioteca_settings` (`chiave`, `valore`, `tipo`, `descrizione`) VA
 -- -------------------------------------------------
 -- 11. Tabella notifiche di attesa disponibilità
 -- -------------------------------------------------
-CREATE TABLE `biblioteca_notifiche_attesa` (
+CREATE TABLE IF NOT EXISTS `biblioteca_notifiche_attesa` (
   `id_notifica` INT(10) UNSIGNED NOT NULL AUTO_INCREMENT,
   `id_utente` INT(10) UNSIGNED NOT NULL,
   `id_libro` INT(10) UNSIGNED NOT NULL,
@@ -52196,7 +52212,7 @@ CREATE TABLE `biblioteca_notifiche_attesa` (
 -- -------------------------------------------------
 -- 12. Tabella log operazioni biblioteca
 -- -------------------------------------------------
-CREATE TABLE `biblioteca_log_operazioni` (
+CREATE TABLE IF NOT EXISTS `biblioteca_log_operazioni` (
   `id_log` INT(10) UNSIGNED NOT NULL AUTO_INCREMENT,
   `id_utente` INT(10) UNSIGNED DEFAULT NULL,
   `azione` VARCHAR(100) NOT NULL,
@@ -52214,7 +52230,7 @@ CREATE TABLE `biblioteca_log_operazioni` (
 -- -------------------------------------------------
 -- 13. Dati di esempio: libri
 -- -------------------------------------------------
-INSERT INTO `biblioteca_libri` (`titolo`, `autore`, `anno_pubblicazione`, `casa_editrice`, `lingua`, `genere`, `codice_dewey`, `isbn`, `tipologia`) VALUES
+INSERT IGNORE INTO `biblioteca_libri` (`titolo`, `autore`, `anno_pubblicazione`, `casa_editrice`, `lingua`, `genere`, `codice_dewey`, `isbn`, `tipologia`) VALUES
 ('I Promessi Sposi', 'Alessandro Manzoni', 1827, 'Mondadori', 'Italiano', 'Romanzo storico', '853.7', '978-88-04-67171-5', 'libro'),
 ('La Divina Commedia', 'Dante Alighieri', 1321, 'Einaudi', 'Italiano', 'Poesia', '851.1', '978-88-06-21973-2', 'libro'),
 ('Il Piccolo Principe', 'Antoine de Saint-Exupéry', 1943, 'Bompiani', 'Italiano', 'Romanzo', '843.912', '978-88-452-9343-4', 'libro'),
@@ -52229,7 +52245,7 @@ INSERT INTO `biblioteca_libri` (`titolo`, `autore`, `anno_pubblicazione`, `casa_
 -- -------------------------------------------------
 -- 14. Dati di esempio: copie fisiche
 -- -------------------------------------------------
-INSERT INTO `biblioteca_copie` (`id_libro`, `numero_copia`, `qr_code_univoco`, `numero_armadio`, `numero_ripiano`, `numero_aula`, `stato`) VALUES
+INSERT IGNORE INTO `biblioteca_copie` (`id_libro`, `numero_copia`, `qr_code_univoco`, `numero_armadio`, `numero_ripiano`, `numero_aula`, `stato`) VALUES
 (1, 1, 'BG-LIB001-C001', 'A1', '3', '101', 'disponibile'),
 (1, 2, 'BG-LIB001-C002', 'A1', '3', '101', 'disponibile'),
 (1, 3, 'BG-LIB001-C003', 'A1', '3', '101', 'disponibile'),
@@ -52248,3 +52264,5 @@ INSERT INTO `biblioteca_copie` (`id_libro`, `numero_copia`, `qr_code_univoco`, `
 (9, 1, 'BG-LIB009-C001', 'A4', '3', '104', 'disponibile'),
 (10, 1, 'BG-LIB010-C001', 'A5', '1', '105', 'disponibile'),
 (10, 2, 'BG-LIB010-C002', 'A5', '1', '105', 'disponibile');
+
+COMMIT;

@@ -1,55 +1,33 @@
 <?php
 /**
- * API Annulla Prenotazione - Biblioteca Gobetti
+ * API Annullamento Prenotazione - Biblioteca Gobetti
  */
-
-require_once '../includes/functions.php';
-
 header('Content-Type: application/json');
+require_once __DIR__ . '/../includes/auth.php';
+require_once __DIR__ . '/../includes/functions.php';
 
 if (!isLogged()) {
     echo json_encode(['success' => false, 'message' => 'Non autenticato']);
     exit;
 }
 
-if ($_SERVER['REQUEST_METHOD'] !== 'DELETE' && $_SERVER['REQUEST_METHOD'] !== 'POST') {
-    echo json_encode(['success' => false, 'message' => 'Metodo non consentito']);
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    echo json_encode(['success' => false, 'message' => 'Metodo non valido']);
     exit;
 }
 
-$prenotazione_id = $_GET['id'] ?? null;
+$userId = $_SESSION['biblioteca_user_id'];
+$idPrenotazione = (int)($_POST['id_prenotazione'] ?? 0);
 
-if (!$prenotazione_id) {
-    echo json_encode(['success' => false, 'message' => 'ID prenotazione mancante']);
+if (!$idPrenotazione) {
+    echo json_encode(['success' => false, 'message' => 'Prenotazione non specificata']);
     exit;
 }
 
-$user_id = $_SESSION['user_id'];
-$db = getDB();
-
-try {
-    // Verifica che la prenotazione appartenga all'utente
-    $stmt = $db->prepare("
-        SELECT * FROM prenotazioni 
-        WHERE id = ? AND utente_id = ? AND stato = 'attiva'
-    ");
-    $stmt->execute([$prenotazione_id, $user_id]);
-    $prenotazione = $stmt->fetch();
-    
-    if (!$prenotazione) {
-        throw new Exception('Prenotazione non trovata o non annullabile');
-    }
-    
-    // Annulla prenotazione
-    $stmt = $db->prepare("UPDATE prenotazioni SET stato = 'annullata' WHERE id = ?");
-    $stmt->execute([$prenotazione_id]);
-    
-    // Log
-    logActivity($user_id, 'prenotazione_annullata', 'prenotazioni', $prenotazione_id, 'Prenotazione annullata dall\'utente');
-    
-    echo json_encode(['success' => true, 'message' => 'Prenotazione annullata']);
-    
-} catch (Exception $e) {
-    echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+$result = annullaPrenotazione($idPrenotazione, $userId);
+if ($result) {
+    logOperazione($userId, 'annullamento_prenotazione', 'biblioteca_prenotazioni', $idPrenotazione, 'Prenotazione annullata');
+    echo json_encode(['success' => true, 'message' => 'Prenotazione annullata con successo.']);
+} else {
+    echo json_encode(['success' => false, 'message' => 'Errore durante l\'annullamento della prenotazione.']);
 }
-?>

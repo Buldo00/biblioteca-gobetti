@@ -1,330 +1,551 @@
 <?php
 /**
- * Gestione Prestiti - Biblioteca Gobetti (Bibliotecari+)
+ * Gestione Prestiti - Biblioteca Gobetti
+ * Gestione completa prestiti personali e per classe
  */
 
-require_once '../includes/functions.php';
-requireMinLevel(LIVELLO_BIBLIOTECARIO);
+require_once __DIR__ . '/../includes/auth.php';
+require_once __DIR__ . '/../includes/functions.php';
 
-$db = getDB();
-$user = getCurrentUser();
+$currentUser = getCurrentUser();
+$livelloUtente = $currentUser['livello'];
 
-// Gestione azioni POST
+// Docenti possono accedere per prenotazioni classe, bibliotecari per tutto
+if ($livelloUtente < LIVELLO_DOCENTE) {
+    requireMinLevel(LIVELLO_BIBLIOTECARIO);
+}
+
+$baseUrl = getBaseUrl();
+$isBibliotecario = $livelloUtente >= LIVELLO_BIBLIOTECARIO;
 $message = '';
 $error = '';
 
+// Gestione azioni POST
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $azione = $_POST['azione'] ?? '';
-    
+
     try {
-        if ($azione === 'crea_prestito_da_prenotazione') {
-            // Crea prestito da prenotazione esistente
-            $prenotazione_id = $_POST['prenotazione_id'];
-            
-            $stmt = $db->prepare("SELECT * FROM prenotazioni WHERE id = ? AND stato = 'attiva'");
-            $stmt->execute([$prenotazione_id]);
-            $prenotazione = $stmt->fetch();
-            
-            if (!$prenotazione) {
-                throw new Exception('Prenotazione non valida');
+        if ($azione === 'create_personal' && $isBibliotecario) {
+            $idUtente = (int)($_POST['id_utente'] ?? 0);
+            $idLibro = (int)($_POST['id_libro'] ?? 0);
+
+            if ($idUtente <= 0 || $idLibro <= 0) {
+                throw new Exception('Seleziona un utente e un libro.');
             }
-            
-            $giorni_prestito = getSetting('giorni_durata_prestito', 14);
-            $data_scadenza = date('Y-m-d H:i:s', strtotime("+$giorni_prestito days"));
-            
-            $stmt = $db->prepare("
-                INSERT INTO prestiti 
-                (prenotazione_id, utente_id, libro_id, dispositivo_id, tipo_prestito, 
-                 data_ritiro, data_scadenza, bibliotecario_ritiro_id, check_ritiro_bibliotecario)
-                VALUES (?, ?, ?, ?, ?, NOW(), ?, ?, 1)
-            ");
-            
-            $stmt->execute([
-                $prenotazione_id,
-                $prenotazione['utente_id'],
-                $prenotazione['libro_id'],
-                $prenotazione['dispositivo_id'],
-                $prenotazione['tipo_prenotazione'],
-                $data_scadenza,
-                $_SESSION['user_id']
-            ]);
-            
-            // Aggiorna prenotazione
-            $stmt = $db->prepare("UPDATE prenotazioni SET stato = 'ritirata' WHERE id = ?");
-            $stmt->execute([$prenotazione_id]);
-            
-            logActivity($_SESSION['user_id'], 'prestito_creato', 'prestiti', $db->lastInsertId(), 'Prestito creato da prenotazione');
-            
-            $message = 'Prestito creato con successo! L\'utente deve ancora confermare il ritiro.';
-            
-        } elseif ($azione === 'conferma_restituzione') {
-            // Conferma restituzione
-            $prestito_id = $_POST['prestito_id'];
-            
-            $stmt = $db->prepare("
-                UPDATE prestiti 
-                SET check_restituzione_bibliotecario = 1,
-                    bibliotecario_restituzione_id = ?,
-                    data_restituzione = NOW(),
-                    stato = 'restituito'
-                WHERE id = ?
-            ");
-            $stmt->execute([$_SESSION['user_id'], $prestito_id]);
-            
-            // Recupera info prestito per rimuovere blacklist
-            $stmt = $db->prepare("SELECT utente_id, libro_id FROM prestiti WHERE id = ?");
-            $stmt->execute([$prestito_id]);
-            $prestito = $stmt->fetch();
-            
-            rimuoviBlacklist($prestito['utente_id'], $_SESSION['user_id']);
-            
-            if ($prestito['libro_id']) {
-                notificaDisponibilita($prestito['libro_id']);
+
+            // Verifica se l'utente può prendere in prestito
+            if (!puoPrenotare($idUtente)) {
+                throw new Exception('L\'utente ha raggiunto il limite di prestiti o è in blacklist.');
             }
-            
-            logActivity($_SESSION['user_id'], 'restituzione_confermata', 'prestiti', $prestito_id, 'Restituzione confermata');
-            
-            $message = 'Restituzione confermata con successo!';
+
+            // Trova una copia disponibile
+            $copieLibro = getCopieLibro($idLibro);
+            $copiaDisponibile = null;
+            foreach ($copieLibro as $c) {
+                if ($c['stato'] === 'disponibile') {
+                    $copiaDisponibile = $c;
+                    break;
+                }
+            }
+
+            if (!$copiaDisponibile) {
+                throw new Exception('Nessuna copia disponibile per questo libro.');
+            }
+
+            $prestitoId = creaPrestito($idUtente, $copiaDisponibile['id_copia'], 'personale');
+            if (!$prestitoId) {
+                throw new Exception('Errore nella creazione del prestito.');
+            }
+
+            logOperazione($currentUser['id'], 'prestito_creato', 'biblioteca_prestiti', $prestitoId, "Prestito personale per utente $idUtente");
+            $message = 'Prestito personale creato con successo! In attesa di conferma ritiro.';
+
+        } elseif ($azione === 'create_class' && $livelloUtente >= LIVELLO_DOCENTE) {
+            $idLibro = (int)($_POST['id_libro_classe'] ?? 0);
+            $idClasse = (int)($_POST['id_classe'] ?? 0);
+            $studentiSelezionati = $_POST['studenti'] ?? [];
+
+            if ($idLibro <= 0 || $idClasse <= 0) {
+                throw new Exception('Seleziona un libro e una classe.');
+            }
+
+            if (empty($studentiSelezionati)) {
+                throw new Exception('Seleziona almeno uno studente.');
+            }
+
+            // Verifica copie disponibili
+            $libro = getLibro($idLibro);
+            $copieDisponibili = max(0, (int)$libro['copie_disponibili']);
+
+            if (count($studentiSelezionati) > $copieDisponibili) {
+                throw new Exception('Non ci sono abbastanza copie disponibili. Disponibili: ' . $copieDisponibili . ', richiesti: ' . count($studentiSelezionati));
+            }
+
+            // Ottieni copie disponibili
+            $copieLibro = getCopieLibro($idLibro);
+            $copieLibere = [];
+            foreach ($copieLibro as $c) {
+                if ($c['stato'] === 'disponibile') {
+                    $copieLibere[] = $c;
+                }
+            }
+
+            $creati = 0;
+            $errori = [];
+            foreach ($studentiSelezionati as $index => $idUtenteStudente) {
+                $idUtenteStudente = (int)$idUtenteStudente;
+
+                if (!puoPrenotare($idUtenteStudente)) {
+                    $errori[] = "Studente ID $idUtenteStudente: limite prestiti raggiunto o in blacklist.";
+                    continue;
+                }
+
+                if (!isset($copieLibere[$index])) {
+                    $errori[] = "Studente ID $idUtenteStudente: nessuna copia disponibile.";
+                    continue;
+                }
+
+                $prestitoId = creaPrestito($idUtenteStudente, $copieLibere[$index]['id_copia'], 'classe');
+                if ($prestitoId) {
+                    $creati++;
+                } else {
+                    $errori[] = "Studente ID $idUtenteStudente: errore creazione prestito.";
+                }
+            }
+
+            logOperazione($currentUser['id'], 'prestito_classe_creato', 'biblioteca_prestiti', $idLibro, "Classe $idClasse, $creati prestiti");
+
+            if ($creati > 0) {
+                $message = "$creati prestiti classe creati con successo!";
+            }
+            if (!empty($errori)) {
+                $error = implode(' ', $errori);
+            }
+
+        } elseif ($azione === 'confirm_pickup' && $isBibliotecario) {
+            $idPrestito = (int)($_POST['id_prestito'] ?? 0);
+            if ($idPrestito <= 0) {
+                throw new Exception('ID prestito non valido.');
+            }
+
+            confermaRitiro($idPrestito, 'bibliotecario', $currentUser['id']);
+            logOperazione($currentUser['id'], 'conferma_ritiro', 'biblioteca_prestiti', $idPrestito, 'Conferma bibliotecario');
+            $message = 'Ritiro confermato! Il prestito verrà attivato quando anche l\'utente confermerà.';
+
+        } elseif ($azione === 'return_book' && $isBibliotecario) {
+            $idPrestito = (int)($_POST['id_prestito'] ?? 0);
+            if ($idPrestito <= 0) {
+                throw new Exception('ID prestito non valido.');
+            }
+
+            $result = restituisciLibro($idPrestito);
+            if (!$result) {
+                throw new Exception('Errore nella restituzione.');
+            }
+
+            logOperazione($currentUser['id'], 'restituzione', 'biblioteca_prestiti', $idPrestito, 'Libro restituito');
+            $message = 'Libro restituito con successo!';
         }
-        
     } catch (Exception $e) {
         $error = $e->getMessage();
     }
 }
 
-// Ottieni prenotazioni attive da trasformare in prestiti
-$prenotazioni_attive = $db->query("
-    SELECT pr.*, 
-           u.nome, u.cognome, u.email,
-           l.titolo as libro_titolo,
-           d.modello as dispositivo_modello
-    FROM prenotazioni pr
-    JOIN utenti u ON pr.utente_id = u.id
-    LEFT JOIN libri l ON pr.libro_id = l.id
-    LEFT JOIN dispositivi d ON pr.dispositivo_id = d.id
-    WHERE pr.stato = 'attiva'
-    ORDER BY pr.data_prenotazione ASC
-")->fetchAll();
+// Dati per i form
+$filtroStato = $_GET['stato'] ?? null;
+if ($filtroStato === '') $filtroStato = null;
+$prestiti = $isBibliotecario ? getTuttiPrestiti($filtroStato) : [];
 
-// Prestiti attivi che necessitano conferma utente per ritiro
-$prestiti_in_attesa_ritiro = $db->query("
-    SELECT p.*, 
-           u.nome, u.cognome, u.email,
-           l.titolo as libro_titolo,
-           d.modello as dispositivo_modello
-    FROM prestiti p
-    JOIN utenti u ON p.utente_id = u.id
-    LEFT JOIN libri l ON p.libro_id = l.id
-    LEFT JOIN dispositivi d ON p.dispositivo_id = d.id
-    WHERE p.stato = 'attivo' 
-    AND p.check_ritiro_bibliotecario = 1 
-    AND p.check_ritiro_utente = 0
-    ORDER BY p.data_ritiro DESC
-")->fetchAll();
+// Carica libri per il dropdown (solo quelli con copie disponibili)
+$tuttiLibri = getLibri([], 1, 1000);
+$libriDisponibili = [];
+foreach ($tuttiLibri['libri'] as $l) {
+    if (max(0, (int)$l['copie_disponibili']) > 0) {
+        $libriDisponibili[] = $l;
+    }
+}
 
-// Prestiti da restituire
-$prestiti_attivi = $db->query("
-    SELECT p.*, 
-           u.nome, u.cognome, u.email,
-           l.titolo as libro_titolo,
-           d.modello as dispositivo_modello,
-           DATEDIFF(p.data_scadenza, NOW()) as giorni_rimanenti
-    FROM prestiti p
-    JOIN utenti u ON p.utente_id = u.id
-    LEFT JOIN libri l ON p.libro_id = l.id
-    LEFT JOIN dispositivi d ON p.dispositivo_id = d.id
-    WHERE p.stato IN ('attivo', 'in_ritardo')
-    AND p.check_ritiro_utente = 1
-    ORDER BY p.data_scadenza ASC
-")->fetchAll();
+// Carica utenti per il dropdown
+$utenti = getTuttiUtenti();
+
+// Carica classi
+$classi = getClassi();
+
+require_once __DIR__ . '/../includes/header.php';
 ?>
-<!DOCTYPE html>
-<html lang="it">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gestione Prestiti - Biblioteca Gobetti</title>
-    <link rel="stylesheet" href="../assets/css/style.css">
-</head>
-<body data-livello="<?php echo $_SESSION['livello']; ?>">
-    <?php include '../includes/header.php'; ?>
-    
-    <div class="container">
-        <h2>🔧 Gestione Prestiti</h2>
-        
-        <?php if ($message): ?>
-            <div class="alert alert-success"><?php echo e($message); ?></div>
-        <?php endif; ?>
-        
-        <?php if ($error): ?>
-            <div class="alert alert-danger"><?php echo e($error); ?></div>
-        <?php endif; ?>
-        
-        <!-- Prenotazioni da Trasformare in Prestiti -->
-        <div class="card">
-            <div class="card-header">
-                <h3 class="card-title">📦 Prenotazioni da Ritirare (<?php echo count($prenotazioni_attive); ?>)</h3>
-            </div>
-            
-            <?php if (empty($prenotazioni_attive)): ?>
-                <p style="text-align: center; padding: 20px; color: #7f8c8d;">
-                    Nessuna prenotazione attiva
-                </p>
-            <?php else: ?>
-                <div class="table-container">
-                    <table class="table">
-                        <thead>
-                            <tr>
-                                <th>Utente</th>
-                                <th>Materiale</th>
-                                <th>Data Prenotazione</th>
-                                <th>Scade il</th>
-                                <th>Tipo</th>
-                                <th>Azioni</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php foreach ($prenotazioni_attive as $pr): ?>
-                                <tr>
-                                    <td>
-                                        <strong><?php echo e($pr['nome'] . ' ' . $pr['cognome']); ?></strong><br>
-                                        <small><?php echo e($pr['email']); ?></small>
-                                    </td>
-                                    <td><?php echo e($pr['libro_titolo'] ?? $pr['dispositivo_modello']); ?></td>
-                                    <td><?php echo formatData($pr['data_prenotazione'], true); ?></td>
-                                    <td>
-                                        <span class="badge badge-warning">
-                                            <?php echo formatData($pr['data_scadenza_ritiro'], true); ?>
-                                        </span>
-                                    </td>
-                                    <td>
-                                        <span class="badge badge-info">
-                                            <?php echo e(ucfirst($pr['tipo_prenotazione'])); ?>
-                                        </span>
-                                    </td>
-                                    <td>
-                                        <form method="POST" style="display: inline;">
-                                            <input type="hidden" name="azione" value="crea_prestito_da_prenotazione">
-                                            <input type="hidden" name="prenotazione_id" value="<?php echo $pr['id']; ?>">
-                                            <button type="submit" class="btn btn-success btn-sm">
-                                                ✓ Consegna Materiale
-                                            </button>
-                                        </form>
-                                    </td>
-                                </tr>
-                            <?php endforeach; ?>
-                        </tbody>
-                    </table>
-                </div>
-            <?php endif; ?>
+
+<div class="container">
+
+    <?php if ($message): ?>
+        <div class="alert alert-success"><?= htmlspecialchars($message) ?></div>
+    <?php endif; ?>
+    <?php if ($error): ?>
+        <div class="alert alert-danger"><?= htmlspecialchars($error) ?></div>
+    <?php endif; ?>
+
+    <!-- Sezione 1: Nuovo Prestito -->
+    <div class="card" style="margin-bottom: var(--space-6);">
+        <div class="card-header">
+            <h2><i class="fas fa-plus-circle"></i> Nuovo Prestito</h2>
         </div>
-        
-        <!-- Prestiti in Attesa di Conferma Utente -->
-        <?php if (!empty($prestiti_in_attesa_ritiro)): ?>
-            <div class="card">
-                <div class="card-header">
-                    <h3 class="card-title">⏳ In Attesa di Conferma Utente (<?php echo count($prestiti_in_attesa_ritiro); ?>)</h3>
-                </div>
-                <div class="table-container">
-                    <table class="table">
-                        <thead>
-                            <tr>
-                                <th>Utente</th>
-                                <th>Materiale</th>
-                                <th>Data Ritiro</th>
-                                <th>Scadenza</th>
-                                <th>Check Bibliotecario</th>
-                                <th>Check Utente</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php foreach ($prestiti_in_attesa_ritiro as $p): ?>
-                                <tr>
-                                    <td><?php echo e($p['nome'] . ' ' . $p['cognome']); ?></td>
-                                    <td><?php echo e($p['libro_titolo'] ?? $p['dispositivo_modello']); ?></td>
-                                    <td><?php echo formatData($p['data_ritiro'], true); ?></td>
-                                    <td><?php echo formatData($p['data_scadenza']); ?></td>
-                                    <td><span class="badge badge-success">✓ Confermato</span></td>
-                                    <td><span class="badge badge-warning">In attesa</span></td>
-                                </tr>
-                            <?php endforeach; ?>
-                        </tbody>
-                    </table>
+        <div class="card-body">
+
+            <!-- Tipo di prestito -->
+            <div class="form-group" style="margin-bottom: var(--space-6);">
+                <label><strong>Tipo di prestito:</strong></label>
+                <div style="display: flex; gap: var(--space-6); margin-top: var(--space-2);">
+                    <?php if ($isBibliotecario): ?>
+                    <label style="display:flex; align-items:center; gap:var(--space-2); cursor:pointer;">
+                        <input type="radio" name="tipo_prestito" value="personale" id="radio_personale" checked
+                               onchange="switchTipoPrestito('personale')">
+                        <i class="fas fa-user"></i> Prestito Personale
+                    </label>
+                    <?php endif; ?>
+                    <?php if ($livelloUtente >= LIVELLO_DOCENTE): ?>
+                    <label style="display:flex; align-items:center; gap:var(--space-2); cursor:pointer;">
+                        <input type="radio" name="tipo_prestito" value="classe" id="radio_classe"
+                               <?= !$isBibliotecario ? 'checked' : '' ?>
+                               onchange="switchTipoPrestito('classe')">
+                        <i class="fas fa-users"></i> Prestito per Classe
+                    </label>
+                    <?php endif; ?>
                 </div>
             </div>
-        <?php endif; ?>
-        
-        <!-- Prestiti Attivi -->
-        <div class="card">
-            <div class="card-header">
-                <h3 class="card-title">📚 Prestiti Attivi (<?php echo count($prestiti_attivi); ?>)</h3>
+
+            <!-- Form Prestito Personale -->
+            <?php if ($isBibliotecario): ?>
+            <div id="form_personale" style="display: block;">
+                <form method="POST" id="formPrestitoPersonale">
+                    <input type="hidden" name="azione" value="create_personal">
+                    <div class="form-row" style="gap: var(--space-4); flex-wrap: wrap; align-items: flex-end;">
+                        <div class="form-group" style="flex:2; min-width:200px;">
+                            <label>Libro <span class="required">*</span></label>
+                            <select name="id_libro" class="form-control" required>
+                                <option value="">-- Seleziona libro --</option>
+                                <?php foreach ($libriDisponibili as $l): ?>
+                                    <option value="<?= (int)$l['id_libro'] ?>">
+                                        <?= htmlspecialchars($l['titolo']) ?> - <?= htmlspecialchars($l['autore'] ?? 'N/D') ?>
+                                        (<?= max(0, (int)$l['copie_disponibili']) ?> disponibili)
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div class="form-group" style="flex:2; min-width:200px;">
+                            <label>Utente <span class="required">*</span></label>
+                            <select name="id_utente" class="form-control" required>
+                                <option value="">-- Seleziona utente --</option>
+                                <?php foreach ($utenti as $u): ?>
+                                    <option value="<?= (int)$u['IDUtente'] ?>">
+                                        <?= htmlspecialchars(($u['cognome'] ?? '') . ' ' . ($u['nome'] ?? '')) ?>
+                                        (<?= htmlspecialchars($u['emailUtente']) ?>)
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <button type="submit" class="btn btn-success">
+                                <i class="fas fa-handshake"></i> Crea Prestito
+                            </button>
+                        </div>
+                    </div>
+                </form>
             </div>
-            
-            <?php if (empty($prestiti_attivi)): ?>
-                <p style="text-align: center; padding: 20px; color: #7f8c8d;">
-                    Nessun prestito attivo
-                </p>
-            <?php else: ?>
-                <div class="table-container">
-                    <table class="table">
-                        <thead>
-                            <tr>
-                                <th>Utente</th>
-                                <th>Materiale</th>
-                                <th>Data Ritiro</th>
-                                <th>Data Scadenza</th>
-                                <th>Stato</th>
-                                <th>Azioni</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php foreach ($prestiti_attivi as $p): ?>
-                                <tr>
-                                    <td>
-                                        <strong><?php echo e($p['nome'] . ' ' . $p['cognome']); ?></strong><br>
-                                        <small><?php echo e($p['email']); ?></small>
-                                    </td>
-                                    <td><?php echo e($p['libro_titolo'] ?? $p['dispositivo_modello']); ?></td>
-                                    <td><?php echo formatData($p['data_ritiro']); ?></td>
-                                    <td><?php echo formatData($p['data_scadenza']); ?></td>
-                                    <td>
-                                        <?php if ($p['stato'] === 'in_ritardo'): ?>
-                                            <span class="badge badge-danger">
-                                                In Ritardo (<?php echo abs($p['giorni_rimanenti']); ?>g)
-                                            </span>
-                                        <?php elseif ($p['giorni_rimanenti'] <= 3): ?>
-                                            <span class="badge badge-warning">
-                                                In Scadenza (<?php echo $p['giorni_rimanenti']; ?>g)
-                                            </span>
-                                        <?php else: ?>
-                                            <span class="badge badge-success">Attivo</span>
-                                        <?php endif; ?>
-                                    </td>
-                                    <td>
-                                        <form method="POST" style="display: inline;">
-                                            <input type="hidden" name="azione" value="conferma_restituzione">
-                                            <input type="hidden" name="prestito_id" value="<?php echo $p['id']; ?>">
-                                            <button 
-                                                type="submit" 
-                                                class="btn btn-primary btn-sm"
-                                                onclick="return confirm('Confermi la restituzione del materiale?')">
-                                                ✓ Conferma Restituzione
-                                            </button>
-                                        </form>
-                                    </td>
-                                </tr>
-                            <?php endforeach; ?>
-                        </tbody>
-                    </table>
-                </div>
             <?php endif; ?>
-        </div>
-        
-        <div style="margin-top: 30px; text-align: center;">
-            <a href="../user/dashboard.php" class="btn btn-secondary">← Torna alla Dashboard</a>
+
+            <!-- Form Prestito per Classe -->
+            <?php if ($livelloUtente >= LIVELLO_DOCENTE): ?>
+            <div id="form_classe" style="display: <?= !$isBibliotecario ? 'block' : 'none' ?>;">
+                <form method="POST" id="formPrestitoClasse">
+                    <input type="hidden" name="azione" value="create_class">
+                    <div class="form-row" style="gap: var(--space-4); flex-wrap: wrap; margin-bottom: var(--space-4);">
+                        <div class="form-group" style="flex:1; min-width:200px;">
+                            <label>Libro <span class="required">*</span></label>
+                            <select name="id_libro_classe" id="select_libro_classe" class="form-control" required
+                                    onchange="aggiornaMaxStudenti()">
+                                <option value="" data-copie="0">-- Seleziona libro --</option>
+                                <?php foreach ($libriDisponibili as $l): ?>
+                                    <option value="<?= (int)$l['id_libro'] ?>" data-copie="<?= max(0, (int)$l['copie_disponibili']) ?>">
+                                        <?= htmlspecialchars($l['titolo']) ?> - <?= htmlspecialchars($l['autore'] ?? 'N/D') ?>
+                                        (<?= max(0, (int)$l['copie_disponibili']) ?> disponibili)
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div class="form-group" style="flex:1; min-width:200px;">
+                            <label>Classe <span class="required">*</span></label>
+                            <select name="id_classe" id="select_classe" class="form-control" required
+                                    onchange="caricaStudentiClasse(this.value)">
+                                <option value="">-- Seleziona classe --</option>
+                                <?php foreach ($classi as $cl): ?>
+                                    <option value="<?= (int)$cl['IDClasse'] ?>">
+                                        <?= htmlspecialchars($cl['anno'] . $cl['sezione']) ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Lista studenti della classe -->
+                    <div id="container_studenti" style="display:none; margin-bottom: var(--space-4);">
+                        <div class="card">
+                            <div class="card-header">
+                                <h3><i class="fas fa-user-graduate"></i> Studenti della classe</h3>
+                                <div class="card-actions">
+                                    <span id="contatore_selezionati" class="badge badge-primary">0 selezionati</span>
+                                    <span id="copie_info" class="badge badge-info">0 copie disponibili</span>
+                                </div>
+                            </div>
+                            <div class="card-body">
+                                <div style="margin-bottom: var(--space-3);">
+                                    <label style="cursor:pointer;">
+                                        <input type="checkbox" id="seleziona_tutti" onchange="toggleTuttiStudenti(this.checked)">
+                                        <strong>Seleziona/Deseleziona tutti</strong>
+                                    </label>
+                                </div>
+                                <div id="lista_studenti" class="form-row" style="gap: var(--space-3); flex-wrap: wrap;">
+                                    <p style="color: var(--gray-600);">Seleziona una classe per vedere gli studenti.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <button type="submit" class="btn btn-success" id="btn_crea_classe" disabled>
+                        <i class="fas fa-users"></i> Crea Prestiti per Classe
+                    </button>
+                </form>
+            </div>
+            <?php endif; ?>
         </div>
     </div>
-    
-    <script src="../assets/js/main.js"></script>
-</body>
-</html>
+
+    <!-- Sezione 2: Gestione Prestiti Esistenti -->
+    <?php if ($isBibliotecario): ?>
+    <div class="card">
+        <div class="card-header">
+            <h2><i class="fas fa-exchange-alt"></i> Gestione Prestiti Esistenti</h2>
+        </div>
+        <div class="card-body">
+
+            <!-- Filtro stato -->
+            <form method="GET" style="margin-bottom: var(--space-4);">
+                <div class="form-row" style="gap: var(--space-4); align-items: flex-end; flex-wrap: wrap;">
+                    <div class="form-group" style="min-width: 200px;">
+                        <label>Filtra per stato</label>
+                        <select name="stato" class="form-control" onchange="this.form.submit()">
+                            <option value="">Tutti gli stati</option>
+                            <option value="in_attesa" <?= $filtroStato === 'in_attesa' ? 'selected' : '' ?>>In attesa</option>
+                            <option value="attivo" <?= $filtroStato === 'attivo' ? 'selected' : '' ?>>Attivo</option>
+                            <option value="in_ritardo" <?= $filtroStato === 'in_ritardo' ? 'selected' : '' ?>>In ritardo</option>
+                            <option value="restituito" <?= $filtroStato === 'restituito' ? 'selected' : '' ?>>Restituito</option>
+                        </select>
+                    </div>
+                </div>
+            </form>
+
+            <div class="table-container">
+                <table class="table table-striped">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Utente</th>
+                            <th>Libro</th>
+                            <th>Copia</th>
+                            <th>Tipo</th>
+                            <th>Stato</th>
+                            <th>Data Prestito</th>
+                            <th>Scadenza</th>
+                            <th class="text-center">Azioni</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    <?php if (empty($prestiti)): ?>
+                        <tr><td colspan="9" style="text-align:center;">Nessun prestito trovato.</td></tr>
+                    <?php else: ?>
+                        <?php foreach ($prestiti as $p): ?>
+                        <tr>
+                            <td><?= (int)$p['id_prestito'] ?></td>
+                            <td>
+                                <strong><?= htmlspecialchars(($p['cognome_utente'] ?? '') . ' ' . ($p['nome_utente'] ?? '')) ?></strong>
+                            </td>
+                            <td><?= htmlspecialchars($p['titolo'] ?? '') ?></td>
+                            <td><code><?= htmlspecialchars($p['qr_code_univoco'] ?? '') ?></code></td>
+                            <td><span class="badge badge-secondary"><?= htmlspecialchars(ucfirst($p['tipo_prestito'] ?? 'personale')) ?></span></td>
+                            <td>
+                                <?php
+                                $statoBadge = 'badge-secondary';
+                                switch ($p['stato']) {
+                                    case 'in_attesa': $statoBadge = 'badge-warning'; break;
+                                    case 'attivo': $statoBadge = 'badge-success'; break;
+                                    case 'in_ritardo': $statoBadge = 'badge-danger'; break;
+                                    case 'restituito': $statoBadge = 'badge-info'; break;
+                                }
+                                ?>
+                                <span class="badge <?= $statoBadge ?>"><?= htmlspecialchars(ucfirst(str_replace('_', ' ', $p['stato']))) ?></span>
+                            </td>
+                            <td><?= $p['data_prestito'] ? date('d/m/Y', strtotime($p['data_prestito'])) : '-' ?></td>
+                            <td><?= $p['data_scadenza'] ? date('d/m/Y', strtotime($p['data_scadenza'])) : '-' ?></td>
+                            <td class="text-center actions">
+                                <?php if ($p['stato'] === 'in_attesa'): ?>
+                                    <form method="POST" style="display:inline;">
+                                        <input type="hidden" name="azione" value="confirm_pickup">
+                                        <input type="hidden" name="id_prestito" value="<?= (int)$p['id_prestito'] ?>">
+                                        <button type="submit" class="btn btn-sm btn-success" title="Conferma Ritiro">
+                                            <i class="fas fa-check"></i> Conferma
+                                        </button>
+                                    </form>
+                                <?php endif; ?>
+                                <?php if (in_array($p['stato'], ['attivo', 'in_ritardo'])): ?>
+                                    <form method="POST" style="display:inline;" onsubmit="return confirm('Confermi la restituzione?');">
+                                        <input type="hidden" name="azione" value="return_book">
+                                        <input type="hidden" name="id_prestito" value="<?= (int)$p['id_prestito'] ?>">
+                                        <button type="submit" class="btn btn-sm btn-primary" title="Restituisci">
+                                            <i class="fas fa-undo"></i> Restituisci
+                                        </button>
+                                    </form>
+                                <?php endif; ?>
+                                <?php if ($p['stato'] === 'restituito'): ?>
+                                    <span style="color: var(--gray-500);"><i class="fas fa-check-circle"></i></span>
+                                <?php endif; ?>
+                            </td>
+                        </tr>
+                        <?php endforeach; ?>
+                    <?php endif; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    <?php endif; ?>
+</div>
+
+<!-- Dati studenti per classe (JSON embedded) -->
+<script>
+var studentiPerClasse = {};
+var maxCopieDisponibili = 0;
+
+<?php
+// Pre-caricare gli studenti per ogni classe in JS
+foreach ($classi as $cl) {
+    $studenti = getStudentiClasse($cl['IDClasse']);
+    $studentiJson = [];
+    foreach ($studenti as $s) {
+        $studentiJson[] = [
+            'id_utente'  => (int)$s['IDUtente'],
+            'nome'       => $s['nome'] ?? '',
+            'cognome'    => $s['cognome'] ?? '',
+        ];
+    }
+    echo "studentiPerClasse[" . (int)$cl['IDClasse'] . "] = " . json_encode($studentiJson, JSON_HEX_APOS | JSON_HEX_QUOT) . ";\n";
+}
+?>
+
+function switchTipoPrestito(tipo) {
+    var formPersonale = document.getElementById('form_personale');
+    var formClasse = document.getElementById('form_classe');
+
+    if (formPersonale) formPersonale.style.display = tipo === 'personale' ? 'block' : 'none';
+    if (formClasse) formClasse.style.display = tipo === 'classe' ? 'block' : 'none';
+}
+
+function aggiornaMaxStudenti() {
+    var select = document.getElementById('select_libro_classe');
+    if (!select) return;
+    var opt = select.options[select.selectedIndex];
+    maxCopieDisponibili = parseInt(opt.getAttribute('data-copie')) || 0;
+
+    var copieInfo = document.getElementById('copie_info');
+    if (copieInfo) copieInfo.textContent = maxCopieDisponibili + ' copie disponibili';
+
+    aggiornaCheckboxStudenti();
+}
+
+function caricaStudentiClasse(idClasse) {
+    var container = document.getElementById('container_studenti');
+    var listaDiv = document.getElementById('lista_studenti');
+
+    if (!idClasse || !studentiPerClasse[idClasse]) {
+        container.style.display = 'none';
+        listaDiv.innerHTML = '<p style="color: var(--gray-600);">Nessuno studente in questa classe.</p>';
+        return;
+    }
+
+    var studenti = studentiPerClasse[idClasse];
+    if (studenti.length === 0) {
+        container.style.display = 'block';
+        listaDiv.innerHTML = '<p style="color: var(--gray-600);">Nessuno studente in questa classe.</p>';
+        return;
+    }
+
+    var html = '';
+    studenti.forEach(function(s) {
+        html += '<label style="display:flex; align-items:center; gap:var(--space-2); min-width:200px; padding:var(--space-2); border:1px solid var(--gray-200); border-radius:var(--border-radius-sm); cursor:pointer;" class="student-checkbox-label">';
+        html += '<input type="checkbox" name="studenti[]" value="' + s.id_utente + '" class="student-checkbox" onchange="aggiornaCheckboxStudenti()">';
+        html += '<span>' + escapeHtml(s.cognome) + ' ' + escapeHtml(s.nome) + '</span>';
+        html += '</label>';
+    });
+
+    listaDiv.innerHTML = html;
+    container.style.display = 'block';
+
+    document.getElementById('seleziona_tutti').checked = false;
+    aggiornaMaxStudenti();
+}
+
+function aggiornaCheckboxStudenti() {
+    var checkboxes = document.querySelectorAll('.student-checkbox');
+    var selezionati = document.querySelectorAll('.student-checkbox:checked').length;
+    var contatore = document.getElementById('contatore_selezionati');
+    var btnCrea = document.getElementById('btn_crea_classe');
+
+    if (contatore) contatore.textContent = selezionati + ' selezionati';
+    if (btnCrea) btnCrea.disabled = selezionati === 0;
+
+    // Limita le checkbox selezionabili al numero di copie disponibili
+    checkboxes.forEach(function(cb) {
+        if (!cb.checked && selezionati >= maxCopieDisponibili) {
+            cb.disabled = true;
+            cb.parentElement.style.opacity = '0.5';
+        } else {
+            cb.disabled = false;
+            cb.parentElement.style.opacity = '1';
+        }
+    });
+}
+
+function toggleTuttiStudenti(seleziona) {
+    var checkboxes = document.querySelectorAll('.student-checkbox');
+    var count = 0;
+
+    checkboxes.forEach(function(cb) {
+        if (seleziona && count < maxCopieDisponibili) {
+            cb.checked = true;
+            cb.disabled = false;
+            cb.parentElement.style.opacity = '1';
+            count++;
+        } else if (seleziona) {
+            cb.checked = false;
+            cb.disabled = true;
+            cb.parentElement.style.opacity = '0.5';
+        } else {
+            cb.checked = false;
+            cb.disabled = false;
+            cb.parentElement.style.opacity = '1';
+        }
+    });
+
+    aggiornaCheckboxStudenti();
+}
+
+function escapeHtml(text) {
+    var div = document.createElement('div');
+    div.appendChild(document.createTextNode(text));
+    return div.innerHTML;
+}
+
+// Init: se docente non-bibliotecario, mostra solo form classe
+<?php if (!$isBibliotecario && $livelloUtente >= LIVELLO_DOCENTE): ?>
+switchTipoPrestito('classe');
+<?php endif; ?>
+</script>
+
+<?php require_once __DIR__ . '/../includes/footer.php'; ?>

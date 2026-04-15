@@ -2,32 +2,29 @@
 /**
  * Pagina di Login - Biblioteca Gobetti
  */
-
-require_once 'includes/functions.php';
+require_once __DIR__ . '/includes/auth.php';
+require_once __DIR__ . '/includes/functions.php';
 
 // Se già loggato, redirect alla dashboard
 if (isLogged()) {
-    header("Location: user/dashboard.php");
+    header('Location: user/dashboard.php');
     exit;
 }
 
-$error = '';
+$errore = '';
 
-// Gestione login
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $username = $_POST['username'] ?? '';
+    $email = trim($_POST['email'] ?? '');
     $password = $_POST['password'] ?? '';
     
-    if (empty($username) || empty($password)) {
-        $error = 'Inserisci username e password';
+    if (empty($email) || empty($password)) {
+        $errore = 'Inserisci email e password.';
     } else {
-        if (login($username, $password)) {
-            header("Location: user/dashboard.php");
+        if (login($email, $password)) {
+            header('Location: user/dashboard.php');
             exit;
         } else {
-            $error = 'Credenziali non valide. Verifica username e password.';
-            // Per debug (commentare in produzione):
-            // $error .= " <a href='test_sistema.php' target='_blank' style='color: white;'>Testa il sistema</a>";
+            $errore = 'Email o password non validi.';
         }
     }
 }
@@ -39,80 +36,76 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Login - Biblioteca Gobetti</title>
     <link rel="stylesheet" href="assets/css/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 </head>
-<body>
+<body class="login-page">
     <div class="login-container">
         <div class="login-card">
             <div class="login-header">
-                <h1>📚 Biblioteca Gobetti</h1>
-                <p>Sistema di Gestione Prestiti</p>
+                <i class="fas fa-book-open login-icon"></i>
+                <h1>Biblioteca Gobetti</h1>
+                <p>Sistema di Gestione Biblioteca Scolastica</p>
             </div>
             
-            <?php if ($error): ?>
-                <div class="alert alert-danger">
-                    <?php echo e($error); ?>
-                </div>
+            <?php if ($errore): ?>
+            <div class="alert alert-danger">
+                <i class="fas fa-exclamation-circle"></i> <?= htmlspecialchars($errore) ?>
+            </div>
             <?php endif; ?>
             
-            <form method="POST" action="">
+            <form method="POST" class="login-form" autocomplete="off">
                 <div class="form-group">
-                    <label for="username" class="form-label">Username</label>
-                    <input 
-                        type="text" 
-                        id="username" 
-                        name="username" 
-                        class="form-control" 
-                        required 
-                        autofocus
-                        value="<?php echo e($_POST['username'] ?? ''); ?>"
-                    >
+                    <label for="email"><i class="fas fa-envelope"></i> Email</label>
+                    <input type="email" id="email" name="email" class="form-control" 
+                           value="<?= htmlspecialchars($_POST['email'] ?? '') ?>"
+                           placeholder="nome.cognome@gobettire.istruzioneer.it" required autofocus>
                 </div>
                 
                 <div class="form-group">
-                    <label for="password" class="form-label">Password</label>
-                    <div style="position: relative;">
-                        <input 
-                            type="password" 
-                            id="password" 
-                            name="password" 
-                            class="form-control" 
-                            required
-                            onpaste="return false"
-                            oncopy="return false"
-                            oncut="return false"
-                            style="padding-right: 45px;"
-                        >
-                        <button 
-                            type="button" 
-                            id="togglePassword"
-                            style="position: absolute; right: 10px; top: 50%; transform: translateY(-50%); background: none; border: none; cursor: pointer; font-size: 1.2rem; padding: 5px;"
-                            onmousedown="document.getElementById('password').type = 'text'"
-                            onmouseup="document.getElementById('password').type = 'password'"
-                            onmouseleave="document.getElementById('password').type = 'password'"
-                            ontouchstart="document.getElementById('password').type = 'text'"
-                            ontouchend="document.getElementById('password').type = 'password'">
-                            👁️
+                    <label for="password"><i class="fas fa-lock"></i> Password</label>
+                    <div class="password-wrapper">
+                        <input type="password" id="password" name="password" class="form-control" 
+                               placeholder="Inserisci la password" required
+                               oncopy="return false" onpaste="return false" oncut="return false">
+                        <button type="button" class="password-toggle" id="togglePassword" 
+                                onmousedown="showPassword()" onmouseup="hidePassword()" 
+                                onmouseleave="hidePassword()" ontouchstart="showPassword()" 
+                                ontouchend="hidePassword()">
+                            <i class="fas fa-eye" id="eyeIcon"></i>
                         </button>
                     </div>
                 </div>
                 
                 <button type="submit" class="btn btn-primary btn-block">
-                    Accedi
+                    <i class="fas fa-sign-in-alt"></i> Accedi
                 </button>
             </form>
             
-            <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #ecf0f1;">
-                <h3 style="font-size: 1.1rem; margin-bottom: 15px; color: #2c3e50;">Account di Test:</h3>
-                <div style="font-size: 0.9rem; color: #7f8c8d; line-height: 1.8;">
-                    <strong>Admin:</strong> admin / password123<br>
-                    <strong>Bibliotecario:</strong> bibliotecario1 / password123<br>
-                    <strong>Docente:</strong> docente1 / password123<br>
-                    <strong>Studente:</strong> studente1 / password123
+            <div class="login-footer">
+                <small>Account di test (password: <code>password123</code>):</small>
+                <div class="test-accounts">
+                    <span class="badge badge-info">s.adam.aachir@gobettire.istruzioneer.it (Studente)</span>
+                    <span class="badge badge-info">s.asedik.aachir@gobettire.istruzioneer.it (Bibliotecario)</span>
+                    <span class="badge badge-info">emanuela.franchini@gobettire.istruzioneer.it (Docente)</span>
+                    <span class="badge badge-info">s.simone.guidetti@gobettire.istruzioneer.it (Admin)</span>
                 </div>
             </div>
         </div>
     </div>
     
-    <script src="assets/js/main.js"></script>
+    <script>
+    function showPassword() {
+        document.getElementById('password').type = 'text';
+        document.getElementById('eyeIcon').className = 'fas fa-eye-slash';
+    }
+    function hidePassword() {
+        document.getElementById('password').type = 'password';
+        document.getElementById('eyeIcon').className = 'fas fa-eye';
+    }
+    // Prevent copy/paste on password
+    document.getElementById('password').addEventListener('paste', e => e.preventDefault());
+    document.getElementById('password').addEventListener('copy', e => e.preventDefault());
+    document.getElementById('password').addEventListener('cut', e => e.preventDefault());
+    </script>
 </body>
 </html>

@@ -2,7 +2,5 @@
 /**
  * Logout - Biblioteca Gobetti
  */
-
-require_once '../includes/functions.php';
+require_once __DIR__ . '/../includes/auth.php';
 logout();
-?>

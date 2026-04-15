@@ -1,137 +1,165 @@
 <?php
 /**
- * Impostazioni Sistema - Biblioteca Gobetti (Admin+)
+ * Impostazioni - Biblioteca Gobetti
+ * Configurazione del sistema (solo Admin)
  */
 
-require_once '../includes/functions.php';
-requireMinLevel(LIVELLO_BIBLIOTECARIO);
+require_once __DIR__ . '/../includes/auth.php';
+require_once __DIR__ . '/../includes/functions.php';
+requireMinLevel(LIVELLO_ADMIN);
 
-$db = getDB();
+$currentUser = getCurrentUser();
+$baseUrl = getBaseUrl();
 $message = '';
 $error = '';
 
+// Definizione impostazioni con etichette e descrizioni
+$impostazioniConfig = [
+    'max_prestiti_studente' => [
+        'label' => 'Max prestiti studente',
+        'descrizione' => 'Numero massimo di prestiti contemporanei per gli studenti',
+        'tipo' => 'number',
+        'default' => '3',
+    ],
+    'max_prestiti_docente' => [
+        'label' => 'Max prestiti docente',
+        'descrizione' => 'Numero massimo di prestiti contemporanei per i docenti',
+        'tipo' => 'number',
+        'default' => '3',
+    ],
+    'giorni_ritiro' => [
+        'label' => 'Giorni per ritiro',
+        'descrizione' => 'Giorni a disposizione per ritirare un libro prenotato',
+        'tipo' => 'number',
+        'default' => '3',
+    ],
+    'giorni_prestito' => [
+        'label' => 'Giorni prestito',
+        'descrizione' => 'Durata massima in giorni di un prestito',
+        'tipo' => 'number',
+        'default' => '30',
+    ],
+    'limite_blacklist' => [
+        'label' => 'Limite blacklist',
+        'descrizione' => 'Numero di ritardi prima dell\'inserimento automatico in blacklist',
+        'tipo' => 'number',
+        'default' => '3',
+    ],
+    'orario_apertura' => [
+        'label' => 'Orario apertura',
+        'descrizione' => 'Orario di apertura della biblioteca',
+        'tipo' => 'time',
+        'default' => '08:00',
+    ],
+    'orario_chiusura' => [
+        'label' => 'Orario chiusura',
+        'descrizione' => 'Orario di chiusura della biblioteca',
+        'tipo' => 'time',
+        'default' => '16:00',
+    ],
+    'email_biblioteca' => [
+        'label' => 'Email biblioteca',
+        'descrizione' => 'Indirizzo email della biblioteca per comunicazioni',
+        'tipo' => 'email',
+        'default' => '',
+    ],
+    'nome_biblioteca' => [
+        'label' => 'Nome biblioteca',
+        'descrizione' => 'Nome visualizzato della biblioteca',
+        'tipo' => 'text',
+        'default' => 'Biblioteca Gobetti',
+    ],
+];
+
 // Gestione salvataggio
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $azione = $_POST['azione'] ?? '';
+
     try {
-        foreach ($_POST as $chiave => $valore) {
-            if ($chiave !== 'salva') {
-                setSetting($chiave, $valore, $_SESSION['user_id']);
+        if ($azione === 'salva_impostazioni') {
+            $salvate = 0;
+            foreach ($impostazioniConfig as $chiave => $config) {
+                if (isset($_POST['setting_' . $chiave])) {
+                    $valore = trim($_POST['setting_' . $chiave]);
+                    setSetting($chiave, $valore, $currentUser['id']);
+                    $salvate++;
+                }
             }
+            logOperazione($currentUser['id'], 'impostazioni_salvate', 'biblioteca_settings', null, "$salvate impostazioni aggiornate");
+            $message = "Impostazioni salvate con successo! ($salvate aggiornate)";
         }
-        
-        logActivity($_SESSION['user_id'], 'impostazioni_modificate', 'impostazioni', null, 'Impostazioni sistema aggiornate');
-        $message = 'Impostazioni salvate con successo!';
-        
     } catch (Exception $e) {
         $error = $e->getMessage();
     }
 }
 
-// Ottieni tutte le impostazioni
-$impostazioni = $db->query("SELECT * FROM impostazioni ORDER BY id")->fetchAll();
+// Carica impostazioni correnti
+$impostazioniDB = getAllSettings();
+$valoriCorrente = [];
+foreach ($impostazioniDB as $imp) {
+    $valoriCorrente[$imp['chiave']] = $imp['valore'];
+}
+
+require_once __DIR__ . '/../includes/header.php';
 ?>
-<!DOCTYPE html>
-<html lang="it">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Impostazioni - Biblioteca Gobetti</title>
-    <link rel="stylesheet" href="../assets/css/style.css">
-</head>
-<body data-livello="<?php echo $_SESSION['livello']; ?>">
-    <?php include '../includes/header.php'; ?>
-    
-    <div class="container">
-        <h2>⚙️ Impostazioni Sistema</h2>
-        
-        <?php if ($message): ?>
-            <div class="alert alert-success"><?php echo e($message); ?></div>
-        <?php endif; ?>
-        
-        <?php if ($error): ?>
-            <div class="alert alert-danger"><?php echo e($error); ?></div>
-        <?php endif; ?>
-        
-        <div class="card">
-            <div class="card-header">
-                <h3 class="card-title">📝 Configurazione Biblioteca</h3>
-            </div>
-            
+
+<div class="container">
+    <div class="card">
+        <div class="card-header">
+            <h2><i class="fas fa-cog"></i> Impostazioni Sistema</h2>
+        </div>
+        <div class="card-body">
+
+            <?php if ($message): ?>
+                <div class="alert alert-success"><?= htmlspecialchars($message) ?></div>
+            <?php endif; ?>
+            <?php if ($error): ?>
+                <div class="alert alert-danger"><?= htmlspecialchars($error) ?></div>
+            <?php endif; ?>
+
             <form method="POST">
-                <?php foreach ($impostazioni as $impostazione): ?>
-                    <div class="form-group">
-                        <label class="form-label">
-                            <strong><?php echo e(ucfirst(str_replace('_', ' ', $impostazione['chiave']))); ?></strong>
-                            <?php if ($impostazione['descrizione']): ?>
-                                <br><small style="color: #7f8c8d;"><?php echo e($impostazione['descrizione']); ?></small>
+                <input type="hidden" name="azione" value="salva_impostazioni">
+
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: var(--space-6);">
+                    <?php foreach ($impostazioniConfig as $chiave => $config): ?>
+                        <?php
+                            $valoreCorrente = $valoriCorrente[$chiave] ?? $config['default'];
+                        ?>
+                        <div class="form-group" style="padding: var(--space-4); background: var(--gray-50); border-radius: var(--border-radius); border: 1px solid var(--gray-200);">
+                            <label style="font-weight: 600; font-size: var(--font-size-base);">
+                                <?= htmlspecialchars($config['label']) ?>
+                            </label>
+                            <p style="font-size: var(--font-size-sm); color: var(--gray-600); margin-bottom: var(--space-2);">
+                                <?= htmlspecialchars($config['descrizione']) ?>
+                            </p>
+                            <?php if ($config['tipo'] === 'number'): ?>
+                                <input type="number" name="setting_<?= htmlspecialchars($chiave) ?>"
+                                       class="form-control" value="<?= htmlspecialchars($valoreCorrente) ?>" min="0">
+                            <?php elseif ($config['tipo'] === 'time'): ?>
+                                <input type="time" name="setting_<?= htmlspecialchars($chiave) ?>"
+                                       class="form-control" value="<?= htmlspecialchars($valoreCorrente) ?>">
+                            <?php elseif ($config['tipo'] === 'email'): ?>
+                                <input type="email" name="setting_<?= htmlspecialchars($chiave) ?>"
+                                       class="form-control" value="<?= htmlspecialchars($valoreCorrente) ?>" placeholder="email@esempio.it">
+                            <?php else: ?>
+                                <input type="text" name="setting_<?= htmlspecialchars($chiave) ?>"
+                                       class="form-control" value="<?= htmlspecialchars($valoreCorrente) ?>">
                             <?php endif; ?>
-                        </label>
-                        
-                        <?php if ($impostazione['tipo'] === 'boolean'): ?>
-                            <select name="<?php echo e($impostazione['chiave']); ?>" class="form-control">
-                                <option value="1" <?php echo $impostazione['valore'] == '1' ? 'selected' : ''; ?>>Sì</option>
-                                <option value="0" <?php echo $impostazione['valore'] == '0' ? 'selected' : ''; ?>>No</option>
-                            </select>
-                            
-                        <?php elseif ($impostazione['tipo'] === 'int'): ?>
-                            <input 
-                                type="number" 
-                                name="<?php echo e($impostazione['chiave']); ?>" 
-                                class="form-control" 
-                                value="<?php echo e($impostazione['valore']); ?>"
-                                min="0"
-                            >
-                            
-                        <?php elseif ($impostazione['tipo'] === 'json'): ?>
-                            <textarea 
-                                name="<?php echo e($impostazione['chiave']); ?>" 
-                                class="form-control" 
-                                rows="4"
-                            ><?php echo e($impostazione['valore']); ?></textarea>
-                            <small style="color: #7f8c8d;">Formato JSON</small>
-                            
-                        <?php else: ?>
-                            <input 
-                                type="text" 
-                                name="<?php echo e($impostazione['chiave']); ?>" 
-                                class="form-control" 
-                                value="<?php echo e($impostazione['valore']); ?>"
-                            >
-                        <?php endif; ?>
-                    </div>
-                <?php endforeach; ?>
-                
-                <button type="submit" name="salva" class="btn btn-primary btn-block">
-                    💾 Salva Impostazioni
-                </button>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+
+                <div style="margin-top: var(--space-6); display: flex; gap: var(--space-4);">
+                    <button type="submit" class="btn btn-primary btn-lg">
+                        <i class="fas fa-save"></i> Salva impostazioni
+                    </button>
+                    <button type="reset" class="btn btn-secondary">
+                        <i class="fas fa-undo"></i> Ripristina
+                    </button>
+                </div>
             </form>
         </div>
-        
-        <div class="card">
-            <div class="card-header">
-                <h3 class="card-title">ℹ️ Informazioni Sistema</h3>
-            </div>
-            
-            <div class="form-group">
-                <strong>Versione PHP:</strong> <?php echo PHP_VERSION; ?>
-            </div>
-            <div class="form-group">
-                <strong>Database:</strong> MySQL
-            </div>
-            <div class="form-group">
-                <strong>Ultima modifica impostazioni:</strong> 
-                <?php 
-                $ultima = $db->query("SELECT MAX(ultima_modifica) as data FROM impostazioni")->fetch();
-                echo formatData($ultima['data'], true);
-                ?>
-            </div>
-        </div>
-        
-        <div style="margin-top: 30px; text-align: center;">
-            <a href="../user/dashboard.php" class="btn btn-secondary">← Torna alla Dashboard</a>
-        </div>
     </div>
-    
-    <script src="../assets/js/main.js"></script>
-</body>
-</html>
+</div>
+
+<?php require_once __DIR__ . '/../includes/footer.php'; ?>

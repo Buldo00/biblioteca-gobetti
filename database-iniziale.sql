@@ -18,8 +18,11 @@ SET time_zone = "+00:00";
 /*!40101 SET NAMES utf8mb4 */;
 
 --
--- Database: `vr5av337_gobettiservicesprova`
+-- Database: `gobettiservicesprova`
 --
+
+CREATE DATABASE IF NOT EXISTS `gobettiservicesprova` DEFAULT CHARACTER SET utf8 COLLATE utf8_unicode_ci;
+USE `gobettiservicesprova`;
 
 -- --------------------------------------------------------
 
@@ -51994,3 +51997,272 @@ COMMIT;
 /*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;
 /*!40101 SET CHARACTER_SET_RESULTS=@OLD_CHARACTER_SET_RESULTS */;
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
+
+
+-- ============================================
+-- MODULO BIBLIOTECA GOBETTI
+-- Aggiunta tabelle e dati per la gestione
+-- della biblioteca scolastica
+-- ============================================
+
+-- -------------------------------------------------
+-- 1. Aggiunta livello Bibliotecario a tipolivelli
+-- -------------------------------------------------
+INSERT IGNORE INTO `tipolivelli` (`IDTipoAccount`, `livelloAccount`, `tipologiaAccount`, `base`, `descrizioneAccount`) VALUES
+(70, 320, 'Bibliotecario', 1, 'Gestione biblioteca scolastica');
+
+-- -------------------------------------------------
+-- 2. Aggiunta colonna password alla tabella utenti
+-- -------------------------------------------------
+SET @dbname = DATABASE();
+SET @tablename = 'utenti';
+SET @columnname = 'passwordUtente';
+SET @preparedStatement = (SELECT IF(
+  (
+    SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA = @dbname
+    AND TABLE_NAME = @tablename
+    AND COLUMN_NAME = @columnname
+  ) > 0,
+  'SELECT 1',
+  CONCAT('ALTER TABLE `utenti` ADD COLUMN `passwordUtente` VARCHAR(255) COLLATE utf8_unicode_ci DEFAULT NULL AFTER `emailPers`')
+));
+PREPARE alterIfNotExists FROM @preparedStatement;
+EXECUTE alterIfNotExists;
+DEALLOCATE PREPARE alterIfNotExists;
+
+-- -------------------------------------------------
+-- 3. Password di test (password123) per account di test
+-- -------------------------------------------------
+-- hash bcrypt di "password123"
+UPDATE `utenti` SET `passwordUtente` = '$2y$10$tUG8c92wxjjnID1RM9UQgeUtLHmBk923DAEF2B0c4I9f9D/7PwImi'
+  WHERE `IDUtente` IN (1, 2, 1386, 651);
+
+-- -------------------------------------------------
+-- 4. Assegnazione ruoli di test
+-- -------------------------------------------------
+
+-- Studente (IDUtente=1): già Studente (idLivello=1, level=100) ✓
+
+-- Docente (IDUtente=1386, Emanuela Franchini): già Docente (idLivello=8, level=300) ✓
+
+-- Bibliotecario (IDUtente=2, Asedik Aachir): aggiunge solo idLivello=70 (level=320)
+-- Massimo livello diventa 320 = Bibliotecario
+INSERT IGNORE INTO `utenti_tipolivelli` (`IDUtente_livello`, `idUtente`, `idLivello`) VALUES
+(2602, 2, 70);
+
+-- Admin (IDUtente=651, Simone Guidetti): già Master (idLivello=34, level=999) ✓
+
+-- -------------------------------------------------
+-- 5. Tabella libri
+-- -------------------------------------------------
+CREATE TABLE IF NOT EXISTS `biblioteca_libri` (
+  `id_libro` INT(10) UNSIGNED NOT NULL AUTO_INCREMENT,
+  `titolo` VARCHAR(255) NOT NULL,
+  `autore` VARCHAR(255) NOT NULL,
+  `anno_pubblicazione` INT(4) DEFAULT NULL,
+  `casa_editrice` VARCHAR(150) DEFAULT NULL,
+  `lingua` VARCHAR(50) DEFAULT 'Italiano',
+  `genere` VARCHAR(100) DEFAULT NULL,
+  `codice_dewey` VARCHAR(50) DEFAULT NULL,
+  `isbn` VARCHAR(20) DEFAULT NULL,
+  `copertina` VARCHAR(255) DEFAULT NULL,
+  `trama` TEXT DEFAULT NULL,
+  `tipologia` ENUM('libro','rivista','dizionario','manuale') DEFAULT 'libro',
+  `data_inserimento` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  `inserito_da` INT(10) UNSIGNED DEFAULT NULL,
+  PRIMARY KEY (`id_libro`),
+  UNIQUE KEY `idx_isbn` (`isbn`),
+  KEY `idx_titolo` (`titolo`),
+  KEY `idx_autore` (`autore`),
+  KEY `idx_genere` (`genere`),
+  KEY `idx_dewey` (`codice_dewey`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci;
+
+-- -------------------------------------------------
+-- 6. Tabella copie fisiche dei libri
+-- -------------------------------------------------
+CREATE TABLE IF NOT EXISTS `biblioteca_copie` (
+  `id_copia` INT(10) UNSIGNED NOT NULL AUTO_INCREMENT,
+  `id_libro` INT(10) UNSIGNED NOT NULL,
+  `numero_copia` INT(5) UNSIGNED NOT NULL DEFAULT 1,
+  `qr_code_univoco` VARCHAR(100) NOT NULL,
+  `numero_armadio` VARCHAR(20) DEFAULT NULL,
+  `numero_ripiano` VARCHAR(20) DEFAULT NULL,
+  `numero_aula` VARCHAR(20) DEFAULT NULL,
+  `stato` ENUM('disponibile','prenotato','in_prestito','danneggiato','smarrito') DEFAULT 'disponibile',
+  `note_danno` TEXT DEFAULT NULL,
+  `data_inserimento` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id_copia`),
+  UNIQUE KEY `idx_qr` (`qr_code_univoco`),
+  KEY `idx_libro` (`id_libro`),
+  KEY `idx_stato` (`stato`),
+  CONSTRAINT `fk_copie_libri` FOREIGN KEY (`id_libro`) REFERENCES `biblioteca_libri` (`id_libro`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci;
+
+-- -------------------------------------------------
+-- 7. Tabella prenotazioni
+-- -------------------------------------------------
+CREATE TABLE IF NOT EXISTS `biblioteca_prenotazioni` (
+  `id_prenotazione` INT(10) UNSIGNED NOT NULL AUTO_INCREMENT,
+  `id_utente` INT(10) UNSIGNED NOT NULL,
+  `id_libro` INT(10) UNSIGNED NOT NULL,
+  `id_copia` INT(10) UNSIGNED DEFAULT NULL,
+  `tipo_prenotazione` ENUM('personale','classe') DEFAULT 'personale',
+  `id_classe` INT(10) DEFAULT NULL,
+  `data_prenotazione` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  `data_scadenza` DATETIME DEFAULT NULL,
+  `stato` ENUM('attiva','confermata','scaduta','annullata') DEFAULT 'attiva',
+  `note` TEXT DEFAULT NULL,
+  PRIMARY KEY (`id_prenotazione`),
+  KEY `idx_utente` (`id_utente`),
+  KEY `idx_libro` (`id_libro`),
+  KEY `idx_stato` (`stato`),
+  KEY `idx_copia` (`id_copia`),
+  CONSTRAINT `fk_prenot_libri` FOREIGN KEY (`id_libro`) REFERENCES `biblioteca_libri` (`id_libro`),
+  CONSTRAINT `fk_prenot_copie` FOREIGN KEY (`id_copia`) REFERENCES `biblioteca_copie` (`id_copia`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci;
+
+-- -------------------------------------------------
+-- 8. Tabella prestiti
+-- -------------------------------------------------
+CREATE TABLE IF NOT EXISTS `biblioteca_prestiti` (
+  `id_prestito` INT(10) UNSIGNED NOT NULL AUTO_INCREMENT,
+  `id_prenotazione` INT(10) UNSIGNED DEFAULT NULL,
+  `id_utente` INT(10) UNSIGNED NOT NULL,
+  `id_copia` INT(10) UNSIGNED NOT NULL,
+  `id_libro` INT(10) UNSIGNED NOT NULL,
+  `tipo_prestito` ENUM('personale','classe') DEFAULT 'personale',
+  `data_prestito` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  `data_scadenza` DATETIME DEFAULT NULL,
+  `data_restituzione` DATETIME DEFAULT NULL,
+  `stato` ENUM('in_attesa','attivo','restituito','in_ritardo','smarrito') DEFAULT 'in_attesa',
+  `check_bibliotecario` TINYINT(1) DEFAULT 0,
+  `check_utente` TINYINT(1) DEFAULT 0,
+  `bibliotecario_id` INT(10) UNSIGNED DEFAULT NULL,
+  `note` TEXT DEFAULT NULL,
+  PRIMARY KEY (`id_prestito`),
+  KEY `idx_utente` (`id_utente`),
+  KEY `idx_copia` (`id_copia`),
+  KEY `idx_libro` (`id_libro`),
+  KEY `idx_stato` (`stato`),
+  CONSTRAINT `fk_prestiti_copie` FOREIGN KEY (`id_copia`) REFERENCES `biblioteca_copie` (`id_copia`),
+  CONSTRAINT `fk_prestiti_libri` FOREIGN KEY (`id_libro`) REFERENCES `biblioteca_libri` (`id_libro`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci;
+
+-- -------------------------------------------------
+-- 9. Tabella blacklist utenti
+-- -------------------------------------------------
+CREATE TABLE IF NOT EXISTS `biblioteca_blacklist` (
+  `id_blacklist` INT(10) UNSIGNED NOT NULL AUTO_INCREMENT,
+  `id_utente` INT(10) UNSIGNED NOT NULL,
+  `motivo` TEXT NOT NULL,
+  `data_inserimento` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  `data_rimozione` DATETIME DEFAULT NULL,
+  `inserito_da` INT(10) UNSIGNED DEFAULT NULL,
+  `attiva` TINYINT(1) DEFAULT 1,
+  PRIMARY KEY (`id_blacklist`),
+  KEY `idx_utente` (`id_utente`),
+  KEY `idx_attiva` (`attiva`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci;
+
+-- -------------------------------------------------
+-- 10. Tabella impostazioni biblioteca
+-- -------------------------------------------------
+CREATE TABLE IF NOT EXISTS `biblioteca_settings` (
+  `id_setting` INT(10) UNSIGNED NOT NULL AUTO_INCREMENT,
+  `chiave` VARCHAR(100) NOT NULL,
+  `valore` TEXT DEFAULT NULL,
+  `tipo` ENUM('string','int','boolean','json') DEFAULT 'string',
+  `descrizione` VARCHAR(255) DEFAULT NULL,
+  `modificato_da` INT(10) UNSIGNED DEFAULT NULL,
+  `data_modifica` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id_setting`),
+  UNIQUE KEY `idx_chiave` (`chiave`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci;
+
+-- Default settings
+INSERT IGNORE INTO `biblioteca_settings` (`chiave`, `valore`, `tipo`, `descrizione`) VALUES
+('max_prestiti_studente', '3', 'int', 'Numero massimo di prestiti attivi per studente'),
+('max_prestiti_docente', '3', 'int', 'Numero massimo di prestiti attivi per docente'),
+('giorni_ritiro', '3', 'int', 'Giorni disponibili per il ritiro dopo la prenotazione'),
+('giorni_prestito', '30', 'int', 'Durata massima del prestito in giorni'),
+('limite_blacklist', '3', 'int', 'Numero di mancati ritiri per finire in blacklist'),
+('orario_apertura', '08:00', 'string', 'Orario di apertura della biblioteca'),
+('orario_chiusura', '17:00', 'string', 'Orario di chiusura della biblioteca'),
+('email_biblioteca', 'biblioteca@gobettire.istruzioneer.it', 'string', 'Email della biblioteca'),
+('nome_biblioteca', 'BIBLIOTECA GOBETTI', 'string', 'Nome visualizzato della biblioteca');
+
+-- -------------------------------------------------
+-- 11. Tabella notifiche di attesa disponibilità
+-- -------------------------------------------------
+CREATE TABLE IF NOT EXISTS `biblioteca_notifiche_attesa` (
+  `id_notifica` INT(10) UNSIGNED NOT NULL AUTO_INCREMENT,
+  `id_utente` INT(10) UNSIGNED NOT NULL,
+  `id_libro` INT(10) UNSIGNED NOT NULL,
+  `data_richiesta` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  `notificato` TINYINT(1) DEFAULT 0,
+  `data_notifica` DATETIME DEFAULT NULL,
+  PRIMARY KEY (`id_notifica`),
+  KEY `idx_utente` (`id_utente`),
+  KEY `idx_libro` (`id_libro`),
+  CONSTRAINT `fk_notif_libri` FOREIGN KEY (`id_libro`) REFERENCES `biblioteca_libri` (`id_libro`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci;
+
+-- -------------------------------------------------
+-- 12. Tabella log operazioni biblioteca
+-- -------------------------------------------------
+CREATE TABLE IF NOT EXISTS `biblioteca_log_operazioni` (
+  `id_log` INT(10) UNSIGNED NOT NULL AUTO_INCREMENT,
+  `id_utente` INT(10) UNSIGNED DEFAULT NULL,
+  `azione` VARCHAR(100) NOT NULL,
+  `tabella` VARCHAR(50) DEFAULT NULL,
+  `record_id` INT(10) UNSIGNED DEFAULT NULL,
+  `dettagli` TEXT DEFAULT NULL,
+  `ip_address` VARCHAR(45) DEFAULT NULL,
+  `data_ora` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id_log`),
+  KEY `idx_utente` (`id_utente`),
+  KEY `idx_azione` (`azione`),
+  KEY `idx_data` (`data_ora`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci;
+
+-- -------------------------------------------------
+-- 13. Dati di esempio: libri
+-- -------------------------------------------------
+INSERT IGNORE INTO `biblioteca_libri` (`titolo`, `autore`, `anno_pubblicazione`, `casa_editrice`, `lingua`, `genere`, `codice_dewey`, `isbn`, `tipologia`) VALUES
+('I Promessi Sposi', 'Alessandro Manzoni', 1827, 'Mondadori', 'Italiano', 'Romanzo storico', '853.7', '978-88-04-67171-5', 'libro'),
+('La Divina Commedia', 'Dante Alighieri', 1321, 'Einaudi', 'Italiano', 'Poesia', '851.1', '978-88-06-21973-2', 'libro'),
+('Il Piccolo Principe', 'Antoine de Saint-Exupéry', 1943, 'Bompiani', 'Italiano', 'Romanzo', '843.912', '978-88-452-9343-4', 'libro'),
+('1984', 'George Orwell', 1949, 'Mondadori', 'Italiano', 'Distopia', '823.912', '978-88-04-66886-9', 'libro'),
+('Il Nome della Rosa', 'Umberto Eco', 1980, 'Bompiani', 'Italiano', 'Giallo storico', '853.914', '978-88-452-7023-7', 'libro'),
+('Harry Potter e la Pietra Filosofale', 'J.K. Rowling', 1997, 'Salani', 'Italiano', 'Fantasy', '823.914', '978-88-7782-984-6', 'libro'),
+('Lo Zingarelli 2024', 'Nicola Zingarelli', 2024, 'Zanichelli', 'Italiano', 'Dizionario', '453', '978-88-08-99444-1', 'dizionario'),
+('Manuale di Fisica', 'Amaldi', 2020, 'Zanichelli', 'Italiano', 'Scientifico', '530', '978-88-08-82000-1', 'manuale'),
+('National Geographic Italia', 'Redazione NG', 2024, 'National Geographic', 'Italiano', 'Divulgazione', '910', '977-11-25-38400-1', 'rivista'),
+('Il Gattopardo', 'Giuseppe Tomasi di Lampedusa', 1958, 'Feltrinelli', 'Italiano', 'Romanzo storico', '853.914', '978-88-07-88051-4', 'libro');
+
+-- -------------------------------------------------
+-- 14. Dati di esempio: copie fisiche
+-- -------------------------------------------------
+INSERT IGNORE INTO `biblioteca_copie` (`id_libro`, `numero_copia`, `qr_code_univoco`, `numero_armadio`, `numero_ripiano`, `numero_aula`, `stato`) VALUES
+(1, 1, 'BG-LIB001-C001', 'A1', '3', '101', 'disponibile'),
+(1, 2, 'BG-LIB001-C002', 'A1', '3', '101', 'disponibile'),
+(1, 3, 'BG-LIB001-C003', 'A1', '3', '101', 'disponibile'),
+(2, 1, 'BG-LIB002-C001', 'A1', '4', '101', 'disponibile'),
+(2, 2, 'BG-LIB002-C002', 'A1', '4', '101', 'disponibile'),
+(3, 1, 'BG-LIB003-C001', 'A2', '1', '102', 'disponibile'),
+(3, 2, 'BG-LIB003-C002', 'A2', '1', '102', 'disponibile'),
+(4, 1, 'BG-LIB004-C001', 'A2', '2', '102', 'disponibile'),
+(5, 1, 'BG-LIB005-C001', 'A3', '1', '103', 'disponibile'),
+(5, 2, 'BG-LIB005-C002', 'A3', '1', '103', 'disponibile'),
+(6, 1, 'BG-LIB006-C001', 'A3', '2', '103', 'disponibile'),
+(6, 2, 'BG-LIB006-C002', 'A3', '2', '103', 'disponibile'),
+(6, 3, 'BG-LIB006-C003', 'A3', '2', '103', 'disponibile'),
+(7, 1, 'BG-LIB007-C001', 'A4', '1', '104', 'disponibile'),
+(8, 1, 'BG-LIB008-C001', 'A4', '2', '104', 'disponibile'),
+(9, 1, 'BG-LIB009-C001', 'A4', '3', '104', 'disponibile'),
+(10, 1, 'BG-LIB010-C001', 'A5', '1', '105', 'disponibile'),
+(10, 2, 'BG-LIB010-C002', 'A5', '1', '105', 'disponibile');
+
+COMMIT;
